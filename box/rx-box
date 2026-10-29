@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# rx-box: box-side maintenance for rx, run by systemd timers that setup.sh installs.
+#   rx-box idle [--dry-run] [--user dev]   (root, every 5 min) power off after 30 idle minutes
+#   rx-box sessions                        print the ssh sessions the idle check counts
+#   rx-box cleanup [--dry-run]             (as the rx user, daily) prune old worktree dirs and jobs
+# Powers off once there have been no active rx units and no ssh sessions (OpenSSH or Tailscale SSH)
+# for the whole limit, and ~/.rx/last-activity is at least the limit old: about 30 minutes after the
+# last rx call or session ends, give or take one 5-minute tick.
+# Tunables (env): RX_IDLE_MIN=30 RX_IDLE_STATE=/run/rx-idle-since RX_KEEP_DAYS=14 RX_JOB_DAYS=3
+set -u
+cmd=${1:-} dry='' user=dev
+shift || true
+while [ $# -gt 0 ]; do
+  case $1 in
+    --dry-run) dry=1 ;;
+    --user) user=$2; shift ;;
+    *) echo "rx-box: unknown option $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+now=$(date +%s)
+age_min() { echo $(((now - $(stat -c %Y "$1" 2>/dev/null || echo 0)) / 60)); }
+
+# Interactive sessions that keep the box up:
+# - OpenSSH: one "sshd: <user>@<tty|notty>" (or "sshd-session: ...") process per connection; an idle
+#   ControlMaster connection counts until ControlPersist expires.
+# - Tailscale SSH never touches sshd. Observed on the real box: tailscaled (parent PID 1) ->
+#   "tailscaled be-child ssh-monitor --local-user=dev ..." (one per session) -> "be-child ssh
+#   --login-shell=..." -> the command. Counting the daemon's direct children (one ssh-monitor per
+#   session) is exact; port-22-, who- or loginctl-based counts miss Tailscale SSH entirely.
+ssh_sessions() { # sets SESSIONS (count) and SESSION_LINES (what was counted)
+  local line ts
+  SESSIONS=0 SESSION_LINES=''
+  ts=$(pgrep -x -P 1 tailscaled | paste -sd, -)
+  while read -r line; do
+    [ -n "$line" ] || continue
+    SESSIONS=$((SESSIONS + 1)) SESSION_LINES="$SESSION_LINES  session: $line"$'\n'
+  done < <(pgrep -a -f '^sshd(-session)?: [^ ]+@' 2>/dev/null; [ -z "$ts" ] || pgrep -a -P "$ts" 2>/dev/null |
+    sed 's/^/(tailscale ssh) /')
+}
+
+idle() {
+  local limit=${RX_IDLE_MIN:-30} state=${RX_IDLE_STATE:-/run/rx-idle-since} uid home units act acts since
+  uid=$(id -u "$user") || exit 1
+  home=$(getent passwd "$user" | cut -d: -f6)
+  units=$(runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user list-units 'rx-*.service' \
+    --state=active,activating,deactivating --no-legend --plain 2>/dev/null | wc -l)
+  ssh_sessions
+  act=$(age_min "$home/.rx/last-activity") acts="${act}m ago"
+  [ -e "$home/.rx/last-activity" ] || acts=never
+  [ -n "$dry" ] && printf '%s' "$SESSION_LINES"
+  if [ "$units" -gt 0 ] || [ "$SESSIONS" -gt 0 ]; then
+    rm -f "$state"
+    echo "busy: $units rx jobs, $SESSIONS ssh sessions, last rx activity $acts"
+    return
+  fi
+  [ -e "$state" ] || touch "$state" # start of the current run of "no jobs, no sessions"
+  since=$(age_min "$state")
+  if [ "$since" -lt "$limit" ] || [ "$act" -lt "$limit" ]; then
+    echo "idle: no jobs or sessions for ${since}m, last rx activity $acts; power off once both reach ${limit}m"
+  elif [ -n "$dry" ]; then
+    echo "idle: no jobs or sessions for ${since}m, last rx activity $acts: would power off"
+  else
+    echo "idle: no jobs or sessions for ${since}m, last rx activity $acts: powering off"
+    systemctl poweroff
+  fi
+}
+
+cleanup() { # prune worktree dirs untouched for RX_KEEP_DAYS and finished jobs older than RX_JOB_DAYS
+  local B=$HOME/rx keep=$((${RX_KEEP_DAYS:-14} * 1440)) jobs=$((${RX_JOB_DAYS:-3} * 1440)) d id J n w
+  export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+  running() { systemctl --user list-units "rx-$1.service" --state=active,activating,deactivating --no-legend | grep -q .; }
+  del() { echo "remove $*"; [ -n "$dry" ] || rm -rf "$@"; }
+  for d in "$B"/w/*/; do
+    [ -d "$d" ] || continue
+    id=$(basename "$d")
+    [ -e "$B/m/$id" ] && w=$B/m/$id || w=$d
+    [ "$(age_min "$w")" -ge "$keep" ] && ! running "$id-*" &&
+      del "$B/w/$id" "$B/m/$id" "$B/jobs/$id" "$B"/snap/"$id"-* "$B"/m/"$id"-*
+  done
+  for J in "$B"/jobs/*/.*@*/; do # job instances: jobs/<wtid>/.<name>@<token>/
+    [ -d "$J" ] || continue
+    J=${J%/} id=$(basename "$(dirname "$J")") n=${J##*/.} n=${n%@*}
+    [ -e "$J/exit" ] || ! running "$id-$n" || continue
+    [ "$(age_min "$J/log")" -ge "$jobs" ] || continue
+    del "$J"
+    [ -e "$B/jobs/$id/$n" ] || del "$B/jobs/$id/$n" "$B/snap/$id-$n" "$B/m/$id-$n" # link now dangling
+  done
+  find "$HOME/.rx/stage" -mindepth 1 -maxdepth 1 -mmin +1440 -exec sh -c 'echo "remove $1"; [ -n "$2" ] || rm -rf "$1"' _ {} "$dry" \; 2>/dev/null
+  find "$HOME/.rx/bin" -name 'rx-*' -mtime +30 -exec sh -c 'echo "remove $1"; [ -n "$2" ] || rm -f "$1"' _ {} "$dry" \; 2>/dev/null
+  true
+}
+
+case $cmd in
+  idle) idle ;;
+  sessions) ssh_sessions; printf '%s%s ssh sessions\n' "$SESSION_LINES" "$SESSIONS" ;;
+  cleanup) cleanup ;;
+  *) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

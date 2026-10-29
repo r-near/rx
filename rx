@@ -1,0 +1,459 @@
+#!/usr/bin/env bash
+# rx: run heavy commands for the current git worktree on a remote Linux build box.
+#
+#   rx run [--] <cmd...>                  sync, run in this worktree's box dir, stream, exit with its code
+#   rx submit [--mem 64G] <name> [--] <cmd...>  sync a private snapshot, start detached, return
+#   rx wait <name>                        reattach: stream the log, exit with the job's code
+#   rx logs <name> [n]                    last n lines of a job's log (default 200)
+#   rx ps [-a]                            jobs of this worktree (-a: all worktrees)
+#   rx kill <name>                        stop a job and everything it started
+#   rx pull <path> [name]                 copy box data into ./.rx-out/ (from a job's snapshot with name)
+#   rx sh                                 interactive shell in this worktree's box dir
+#   rx up | rx status | rx stop [-f]      box lifecycle (gcloud)
+#   rx grow <size>                        resize the data disk (e.g. 1000GB) and grow its filesystem
+#
+# One argument after "--" is run as a shell string; several are run as an argv, word by word.
+# The name of the job started by "rx run" is "run". Exit codes: the job's own code, 130 Ctrl-C,
+# 143 killed or stopped, 255 box unreachable / job lost, 75 box stocked out (retry later),
+# 2 usage error or refused.
+# Config: ~/.config/rx/config (sourced): RX_HOST, RX_GCE_INSTANCE, RX_GCE_ZONE, RX_GCE_PROJECT,
+# RX_GCE_DATA_DISK, RX_SSH_CONFIG, RX_ENV (env var names forwarded to jobs; default
+# "RUST_LOG RUST_BACKTRACE").
+set -u
+
+die() { echo "rx: $*" >&2; exit 2; }
+fail() { echo "rx: $*" >&2; exit 255; }
+
+# ============================ box half =====================================
+# Runs on the box as ~/.rx/bin/rx-<hash> __remote <stage-dir> <subcommand> [args].
+# Box layout: ~/rx/w/<wtid> mirrors, ~/rx/snap/<wtid>-<name> job snapshots,
+# ~/rx/m/<dir-id> last-synced manifests, ~/rx/jobs/<wtid>/<name>/ job state and log.
+
+b_busy() { # unit
+  case $(systemctl --user show -p ActiveState --value "$1.service" 2>/dev/null) in
+    active | activating | deactivating | reloading | refreshing) return 0 ;;
+  esac
+  return 1
+}
+b_boot() { # boot_id + the user manager's invocation: Docker restarts don't change boot_id
+  printf '%s/%s\n' "$(cat /proc/sys/kernel/random/boot_id)" \
+    "$(systemctl show -p InvocationID --value "user@$(id -u).service")"
+}
+b_status() { # jobdir unit
+  if [ -e "$1/exit" ]; then echo "exit $(cat "$1/exit")"
+  elif b_busy "$2"; then echo running
+  elif [ -e "$1/killed" ]; then echo killed
+  elif [ "$(cat "$1/boot" 2>/dev/null)" != "$(b_boot)" ]; then echo "lost (box restarted)"
+  else echo "stopped (no exit code)"; fi
+}
+b_code() { case $1 in exit\ *) echo "${1#exit }" ;; lost*) echo 255 ;; *) echo 143 ;; esac; }
+b_rewrite() { # jobdir: stdin -> stdout with box paths (physical and via ~/rx) replaced by the local path
+  local a l b d=$'\001'
+  a=$(sed 's/[]\.*^$[]/\\&/g' "$1/dest")
+  l=$(sed 's/[]\.*^$[]/\\&/g' "$1/ldest")
+  b=$(sed 's/[\&]/\\&/g' "$1/root")
+  sed -u -e "s$d$a$d$b${d}g" -e "s$d$l$d$b${d}g"
+}
+b_deletions() { # dest old-manifest new-manifest: delete exactly the files that left the manifest
+  [ -f "$2" ] || return 0
+  LC_ALL=C comm -z -23 <(LC_ALL=C sort -zu "$2") <(LC_ALL=C sort -zu "$3") | b_rm "$1"
+}
+b_rm() { # dest: delete NUL-separated relative paths from stdin, then their emptied parent dirs
+  local p
+  while IFS= read -r -d '' p; do
+    case "/$p/" in */../* | */./* | //*) continue ;; esac
+    rm -f -- "$1/$p" 2>/dev/null
+    case $p in */*) (cd "$1" && rmdir -p --ignore-fail-on-non-empty -- "${p%/*}" 2>/dev/null) ;; esac
+  done
+}
+b_disk() { # data disk usage; warns above 85%
+  local pct
+  df -P -h "$B/" | awk 'NR==2 {print "data disk " $6 ": " $5 " used (" $3 " of " $2 ", " $4 " free)"}'
+  pct=$(df -P "$B/" | awk 'NR==2 {print $5+0}')
+  [ "$pct" -le 85 ] || echo "rx: warning: the box data disk is $pct% full (rx status; rx grow <size>)" >&2
+}
+b_slices() {
+  local d=$HOME/.config/systemd/user
+  [ -e "$d/rx-job.slice" ] && return
+  mkdir -p "$d"
+  printf '[Slice]\nCPUWeight=1000\n' >"$d/rx-run.slice"
+  printf '[Slice]\nCPUWeight=100\n' >"$d/rx-job.slice"
+  systemctl --user daemon-reload
+}
+b_recv() { # rsync --server args...: lock, wait or refuse, prepare dest, sync, start; all under one lock
+  local mode wtid name unit dest mf J dir slice i rc said='' props=()
+  mode=$(cat "$ST/mode") wtid=$(cat "$ST/wtid") name=$(cat "$ST/name")
+  unit=rx-$wtid-$name
+  exec 8>>"$HOME/.rx/lock/$wtid-$name"
+  while :; do
+    flock 8
+    b_busy "$unit" || break
+    [ "$mode" = run ] || { echo "rx: job $name is still running (rx wait $name, rx kill $name)" >&2; exit 2; }
+    flock -u 8
+    [ -n "$said" ] || { echo "rx: waiting for the running job in this worktree (rx ps)" >&2; said=1; }
+    kill -0 "$PPID" 2>/dev/null || exit 1
+    sleep 1
+  done
+  if [ "$mode" = submit ]; then
+    dest=$B/snap/$wtid-$name mf=$B/m/$wtid-$name
+    rm -rf "$dest" "$mf"
+    mkdir -p "$B/w/$wtid"
+    exec 7>>"$HOME/.rx/lock/$wtid-run"
+    flock 7
+    cp -a --reflink=auto "$B/w/$wtid" "$dest" && { [ ! -f "$B/m/$wtid" ] || cp "$B/m/$wtid" "$mf"; } || exit 1
+    flock -u 7
+    find "$dest" -maxdepth 4 -name target -type l -delete # mbx target links: the job gets its own
+  else
+    dest=$B/w/$wtid mf=$B/m/$wtid
+  fi
+  mkdir -p "$dest"
+  b_deletions "$dest" "$mf" "$ST/manifest"
+  rsync "$@" || exit
+  b_rm "$dest" <"$ST/missing" # rsync --delete-missing-args removed these; drop emptied dirs too
+  cp "$ST/manifest" "$mf"
+  # Each job gets a fresh instance dir; jobs/<wtid>/<name> links to the newest. Followers of the
+  # previous instance keep reading their own log and exit code while a queued run starts.
+  J=$B/jobs/$wtid/.$name@$(cat "$ST/token")
+  mkdir -p "$J" && cp "$ST/argv" "$ST/env" "$ST/root" "$ST/token" "$ST/cmd" "$J/" || exit 1
+  ln -sfn "${J##*/}" "$B/jobs/$wtid/$name.tmp" && mv -Tf "$B/jobs/$wtid/$name.tmp" "$B/jobs/$wtid/$name"
+  # shellcheck disable=SC2012 # names and tokens are [A-Za-z0-9_.@-]
+  ls -dt "$B/jobs/$wtid/.$name@"* | tail -n +3 | xargs -r rm -rf
+  dir=$(cd "$dest" && pwd -P)
+  printf '%s' "$dir" >"$J/dest"
+  printf '%s' "$dest" >"$J/ldest"
+  printf '%s' "$dir/$(cat "$ST/rel")" >"$J/dir"
+  b_boot >"$J/boot"
+  date '+%Y-%m-%d %H:%M' >"$J/started"
+  : >"$J/log"
+  b_slices
+  slice=rx-run.slice
+  [ "$mode" = submit ] && slice=rx-job.slice
+  [ -s "$ST/mem" ] && props=(-p "MemoryMax=$(cat "$ST/mem")")
+  for i in 1 2 3 4 5; do
+    systemd-run --user --collect --quiet --unit="$unit" --slice="$slice" -p TimeoutStopSec=10 \
+      -p OOMPolicy=continue ${props[@]+"${props[@]}"} "$BX" __remote - job "$J" && break
+    rc=$?
+    [ $i = 5 ] && exit $rc
+    systemctl --user reset-failed "$unit.service" 2>/dev/null
+    sleep 0.5
+  done
+  rm -rf "$ST"
+}
+b_job() { # jobdir: the unit's main process
+  local J=$1 kv a args=() rc
+  exec >>"$J/log" 2>&1 </dev/null
+  if cd "$(cat "$J/dir")"; then
+    export CARGO_TERM_COLOR=never
+    while IFS= read -r -d '' kv; do export "${kv?}"; done <"$J/env"
+    while IFS= read -r -d '' a; do args+=("$a"); done <"$J/argv"
+    if [ ${#args[@]} -eq 1 ]; then bash -l -c "${args[0]}"; else bash -l -c 'exec "$@"' rx "${args[@]}"; fi
+    rc=$?
+  else
+    echo "rx: directory does not exist on the box (empty or untracked locally?)"
+    rc=1
+  fi
+  echo $rc >"$J/exit.tmp" && mv "$J/exit.tmp" "$J/exit"
+}
+b_inst() { # wtid name token|-: the job instance dir (by token, or the newest)
+  if [ "$3" = - ]; then readlink -e "$B/jobs/$1/$2"; else readlink -e "$B/jobs/$1/.$2@$3"; fi
+}
+b_follow() { # wtid name token|-
+  local L=$B/jobs/$1/$2 J unit=rx-$1-$2 w s
+  J=$(b_inst "$@") || { [ "$3" = - ] && echo "rx: no such job: $2" >&2 || echo "rx: $2 did not start" >&2; exit 2; }
+  (while [ ! -e "$J/exit" ] && b_busy "$unit" && [ "$(readlink -e "$L")" = "$J" ]; do sleep 0.5; done) &
+  w=$!
+  tail -s 0.5 -n +1 -f --pid=$w "$J/log" 2>/dev/null | b_rewrite "$J"
+  s=$(b_status "$J" "$unit")
+  case $s in exit\ *) ;; *) echo "rx: $2 $s" >&2 ;; esac
+  exit "$(b_code "$s")"
+}
+b_ps() { # wtid|-a
+  local J n=0 s pat="$B/jobs/$1/*/"
+  [ "$1" = -a ] && pat="$B/jobs/*/*/"
+  printf '%-24s %-22s %-17s %s\n' NAME STATE STARTED COMMAND
+  for J in $pat; do
+    [ -d "$J" ] || continue
+    J=${J%/} s=$(b_status "$J" "rx-$(basename "$(dirname "$J")")-$(basename "$J")")
+    if [ "$1" = -a ]; then n=$(basename "$(dirname "$J")")/$(basename "$J"); else n=$(basename "$J"); fi
+    printf '%-24s %-22s %-17s %.80s\n' "$n" "$s" "$(cat "$J/started")" "$(cat "$J/cmd")"
+  done
+  n=$(systemctl --user list-units 'rx-*.service' --state=active,activating,deactivating --no-legend | wc -l)
+  echo "($n rx jobs running on the box)"
+}
+b_main() {
+  export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+  B=$HOME/rx ST=$1 BX=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+  local sub=$2 J
+  shift 2
+  mkdir -p "$B/w" "$B/snap" "$B/m" "$B/jobs" "$HOME/.rx/lock" && touch "$HOME/.rx/last-activity"
+  case $sub in stage | recv | job) ;; *) [ "$ST" = - ] || rm -rf "$ST" ;; esac
+  case $sub in
+    stage) # pre-check so a refused submit fails before any transfer (recv re-checks under the lock)
+      J=$(cat "$ST/name")
+      if [ "$(cat "$ST/mode")" = submit ] && b_busy "rx-$(cat "$ST/wtid")-$J"; then
+        rm -rf "$ST"
+        die "job $J is still running (rx wait $J, rx kill $J)"
+      fi
+      b_disk >/dev/null ;;
+    recv) b_recv "$@" ;;
+    job) b_job "$1" ;;
+    follow) b_follow "$@" ;;
+    jstate) J=$(b_inst "$@") && b_status "$J" "rx-$1-$2" ;;
+    ps) b_ps "$1" ;;
+    logs)
+      J=$B/jobs/$1/$2
+      [ -d "$J" ] || die "no such job: $2"
+      tail -n "$3" "$J/log" | b_rewrite "$J" ;;
+    kill) # wtid name token|-: with a token, only that instance, and only while it is the current one
+      J=$(b_inst "$@") || die "no such job: $2"
+      if [ "$(readlink -e "$B/jobs/$1/$2")" != "$J" ]; then
+        echo "rx: $2 is not running (a newer $2 replaced it)" >&2
+      elif [ ! -e "$J/exit" ] && b_busy "rx-$1-$2"; then
+        touch "$J/killed"
+        systemctl --user stop "rx-$1-$2.service" && echo "rx: killed $2" >&2
+      else echo "rx: $2 is not running ($(b_status "$J" "rx-$1-$2"))" >&2; fi ;;
+    status)
+      echo "running rx jobs: $(systemctl --user list-units 'rx-*.service' --state=active,activating,deactivating --no-legend | wc -l)"
+      echo "uptime: $(uptime -p)"
+      b_disk ;;
+    grow)
+      J=$(df -P "$B/" | awk 'NR==2 {print $6}')
+      [ "$(findmnt -n -o FSTYPE --target "$J")" = xfs ] || die "$J is not XFS; grow it by hand"
+      sudo -n xfs_growfs "$J" >/dev/null || die "xfs_growfs $J failed"
+      b_disk ;;
+    *) die "unknown box command: $sub" ;;
+  esac
+}
+if [ "${1:-}" = __remote ]; then
+  shift
+  b_main "$@"
+  exit
+fi
+
+# ============================ client =======================================
+CONFIG=${RX_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/rx/config}
+# shellcheck disable=SC1090
+[ -f "$CONFIG" ] && . "$CONFIG"
+HOST=${RX_HOST:-buildbox}
+SELF=${BASH_SOURCE[0]}
+SSH=(ssh -o ControlMaster=auto -o "ControlPath=${RX_CONTROL_DIR:-$HOME/.ssh}/rx-%C" -o ControlPersist=15m
+  -o ServerAliveInterval=10 -o ServerAliveCountMax=3)
+[ -n "${RX_SSH_CONFIG:-}" ] && SSH+=(-F "$RX_SSH_CONFIG")
+ST='' TOKEN=''
+[ -d "${RX_CONTROL_DIR:-$HOME/.ssh}" ] || mkdir -m 700 "${RX_CONTROL_DIR:-$HOME/.ssh}"
+
+find_rsync() { # upstream rsync >= 3.1 (macOS /usr/bin/rsync is openrsync)
+  local r v
+  for r in ${RX_RSYNC:-/opt/homebrew/bin/rsync /usr/local/bin/rsync $(command -v rsync)}; do
+    [ -x "$r" ] || continue
+    v=$("$r" --version 2>/dev/null | sed -n '1s/^rsync  *version  *v*\([0-9]*\.[0-9]*\).*/\1/p')
+    case $v in 3.[1-9]* | [4-9].*) RSYNC=$r; return ;; esac
+  done
+  die "need upstream rsync >= 3.1 (macOS ships openrsync): brew install rsync"
+}
+rsh() { # ssh command as one string for rsync -e (rsync splits on spaces, honors single quotes)
+  local a s=''
+  for a in "${SSH[@]}"; do
+    case $a in *"'"*) die "single quote in ssh option: $a" ;; esac
+    s="$s '$a'"
+  done
+  printf '%s' "${s# }"
+}
+repo_ctx() {
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git worktree"
+  local cwd common repo
+  cwd=$(pwd -P) rel=${cwd#"$root"} rel=${rel#/}
+  common=$(cd "$root" && cd "$(git rev-parse --git-common-dir)" && pwd -P)
+  case $common in */.git) repo=${common%/.git} ;; *) repo=${common%.git} ;; esac
+  repo=$(basename "$repo" | LC_ALL=C tr -c 'A-Za-z0-9_\n' '_' | cut -c1-40)
+  wtid=$repo-$(printf '%s' "$root" | git hash-object --stdin | cut -c1-10)
+}
+stage_dir() {
+  [ -n "$ST" ] && return
+  ST=$(mktemp -d "${TMPDIR:-/tmp}/rx.XXXXXX") || exit 2
+  trap 'rm -rf "$ST"' EXIT
+  TOKEN=$(basename "$ST")-$$
+  printf '%s' "$TOKEN" >"$ST/token"
+  cp "$SELF" "$ST/rx"
+  HASH=$(git hash-object "$SELF" | cut -c1-16)
+}
+rcall() { # [-x] <subcommand> [token-safe args]: run the box half; ships itself + $ST on stdin
+  local x='' a
+  [ "$1" = -x ] && { x="exec"; shift; }
+  stage_dir
+  for a; do case $a in *[!A-Za-z0-9_.-]* | '') die "bad argument: $a" ;; esac; done
+  $x "${SSH[@]}" "$HOST" "set -e; d=.rx/stage/$TOKEN; mkdir -p \$d .rx/bin; tar -xf - -C \$d
+    f=.rx/bin/rx-$HASH; [ -x \$f ] || { cp \$d/rx \$f.\$\$; chmod 755 \$f.\$\$; mv -f \$f.\$\$ \$f; }
+    exec \$f __remote \$d $*" < <(COPYFILE_DISABLE=1 tar --format ustar -cf - -C "$ST" .)
+}
+probe() { # does the box answer within a few seconds? kills a hung control master
+  "${SSH[@]}" -o ConnectTimeout=5 -o BatchMode=yes "$HOST" true </dev/null >/dev/null 2>&1 &
+  local p=$! n=0
+  while kill -0 $p 2>/dev/null; do
+    if [ $n -ge 40 ]; then
+      kill $p 2>/dev/null; wait $p 2>/dev/null
+      "${SSH[@]}" -O exit "$HOST" >/dev/null 2>&1
+      return 1
+    fi
+    sleep 0.2; n=$((n + 1))
+  done
+  wait $p
+}
+gce() { # <instances|disks> <verb> <name> [flags]
+  command -v gcloud >/dev/null || die "gcloud not found"
+  [ -n "${RX_GCE_ZONE:-}" ] || die "RX_GCE_ZONE not set"
+  gcloud compute "$1" "$2" "$3" --zone "$RX_GCE_ZONE" ${RX_GCE_PROJECT:+--project "$RX_GCE_PROJECT"} --quiet "${@:4}"
+}
+wake() { # start the instance and wait for ssh; a Spot stockout exits 75 right away
+  local err
+  echo "rx: waking box…" >&2
+  if ! err=$(gce instances start "$RX_GCE_INSTANCE" 2>&1 >/dev/null); then
+    if printf '%s' "$err" | grep -qiE 'ZONE_RESOURCE_POOL_EXHAUSTED|stockout|not have enough resources|RESOURCE_NOT_AVAILABLE|resource_availability'; then
+      echo "rx: box is stocked out in $RX_GCE_ZONE; try again later" >&2
+      exit 75
+    fi
+    printf '%s\n' "$err" >&2
+    fail "gcloud could not start $RX_GCE_INSTANCE"
+  fi
+  local t0=$SECONDS
+  until probe; do
+    [ $((SECONDS - t0)) -lt "${RX_WAKE_TIMEOUT:-180}" ] || fail "box started but ssh did not answer within ${RX_WAKE_TIMEOUT:-180}s"
+    sleep 2
+  done
+}
+connect() {
+  probe || probe && return
+  [ -n "${RX_GCE_INSTANCE:-}" ] || fail "cannot reach $HOST over ssh"
+  wake
+}
+prepare_job() { # mode name cmd...: write the job spec into the stage dir
+  local v isset
+  stage_dir
+  printf '%s' "$1" >"$ST/mode"; printf '%s' "$wtid" >"$ST/wtid"; printf '%s' "$2" >"$ST/name"
+  printf '%s' "$root" >"$ST/root"; printf '%s' "$rel" >"$ST/rel"; printf '%s' "${MEM:-}" >"$ST/mem"
+  shift 2
+  printf '%s\0' "$@" >"$ST/argv"
+  if [ $# -eq 1 ]; then printf '%s' "$1" >"$ST/cmd"; else printf '%q ' "$@" >"$ST/cmd"; fi
+  : >"$ST/env"
+  for v in ${RX_ENV-RUST_LOG RUST_BACKTRACE}; do
+    case $v in [A-Za-z_]*) ;; *) die "bad RX_ENV name: $v" ;; esac
+    case $v in *[!A-Za-z0-9_]*) die "bad RX_ENV name: $v" ;; esac
+    eval "isset=\${$v+x}"
+    [ -n "$isset" ] && printf '%s=%s\0' "$v" "${!v}" >>"$ST/env"
+  done
+  git -C "$root" ls-files -z --cached >"$ST/manifest"
+  git -C "$root" ls-files -z --deleted >"$ST/missing"
+  git -C "$root" ls-files -z --others --exclude-standard | # untracked symlinks (mbx target) stay local
+    while IFS= read -r -d '' f; do
+      [ -L "$root/$f" ] && continue
+      printf '%s\0' "$f"
+      case ${f##*/} in .env | .env.* | *.pem | *.key | id_rsa* | id_ed25519* | *credentials* | *.p12)
+        n=$((${n:-0} + 1))
+        if [ $n -le 5 ]; then
+          echo "rx: warning: syncing untracked $f, which looks like a secret; gitignore it if it shouldn't leave this Mac" >&2
+        elif [ $n = 6 ]; then echo "rx: warning: more untracked secret-looking files not listed" >&2; fi ;;
+      esac
+    done >>"$ST/manifest"
+}
+sync_start() { # mode name: one rsync whose box side locks, syncs and starts the job
+  local dest=rx/w/$wtid rc
+  [ "$1" = submit ] && dest=rx/snap/$wtid-$2
+  find_rsync
+  rcall stage || exit
+  "$RSYNC" -a --no-owner --no-group --files-from="$ST/manifest" --from0 --delete-missing-args \
+    -e "$(rsh)" --rsync-path=".rx/bin/rx-$HASH __remote .rx/stage/$TOKEN recv" "$root/" "$HOST:$dest/"
+  rc=$?
+  case $rc in 0 | 24) ;; 2) exit 2 ;; *) fail "sync or start failed (rsync exit $rc)" ;; esac
+}
+attach() { # name own|wait: stream until the job ends. Ctrl-C stops an owned run; TERM/HUP detach.
+  local name=$1 fp rc s hint="rx: detached; $1 keeps running on the box. Reattach: rx wait $1 (or rx ps)"
+  local tok=-
+  stage_dir
+  [ "$2" = own ] && tok=$TOKEN
+  rcall -x follow "$wtid" "$name" "$tok" &
+  fp=$!
+  if [ "$2" = own ]; then
+    trap 'kill $fp 2>/dev/null; rcall kill "$wtid" "$name" "$TOKEN"; exit 130' INT
+  else
+    trap 'kill $fp 2>/dev/null; echo "$hint" >&2; exit 130' INT
+  fi
+  trap 'kill $fp 2>/dev/null; echo "$hint" >&2; exit 143' TERM HUP
+  wait $fp
+  rc=$?
+  trap - INT TERM HUP
+  if [ $rc = 255 ]; then # the job's own 255, a lost job, or a dropped connection?
+    s=$(rcall jstate "$wtid" "$name" "$tok" 2>/dev/null) || s=unknown
+    case $s in
+      exit\ 255 | lost*) ;;
+      *) fail "lost the connection to the box; $name: $s. Reattach: rx wait $name" ;;
+    esac
+  fi
+  exit $rc
+}
+
+cmd=${1:-}
+shift || true
+case $cmd in
+  run)
+    [ "${1:-}" = -- ] && shift
+    [ $# -gt 0 ] || die "usage: rx run [--] <cmd...>"
+    repo_ctx; prepare_job run run "$@"; connect; sync_start run run; attach run own ;;
+  submit)
+    MEM=''
+    [ "${1:-}" = --mem ] && { MEM=${2:-}; shift 2 || die "usage: rx submit [--mem 64G] <name> [--] <cmd...>"; }
+    name=${1:-}
+    shift || true
+    [ "${1:-}" = --mem ] && { MEM=${2:-}; shift 2 || die "--mem needs a size"; }
+    [ "${1:-}" = -- ] && shift
+    case $name in '' | run | -* | *[!A-Za-z0-9_-]*) die "usage: rx submit [--mem 64G] <name> [--] <cmd...>; name is [A-Za-z0-9_-] and not 'run'" ;; esac
+    case $MEM in '' | [0-9]*[0-9KMGT]) ;; *) die "bad --mem size: $MEM" ;; esac
+    case $MEM in *[!0-9KMGT]*) die "bad --mem size: $MEM" ;; esac
+    [ $# -gt 0 ] || die "usage: rx submit [--mem 64G] <name> [--] <cmd...>"
+    repo_ctx; prepare_job submit "$name" "$@"; connect; sync_start submit "$name"
+    echo "rx: started $name on a snapshot of this worktree (rx wait $name | rx logs $name | rx kill $name)" >&2 ;;
+  wait)
+    [ $# = 1 ] || die "usage: rx wait <name>"
+    repo_ctx; connect; attach "$1" wait ;;
+  logs)
+    [ $# -ge 1 ] || die "usage: rx logs <name> [n]"
+    case ${2:-200} in *[!0-9]*) die "usage: rx logs <name> [n]" ;; esac
+    repo_ctx; connect; rcall logs "$wtid" "$1" "${2:-200}" ;;
+  ps)
+    if [ "${1:-}" = -a ]; then connect; rcall ps -a; else repo_ctx; connect; rcall ps "$wtid"; fi ;;
+  kill)
+    [ $# = 1 ] || die "usage: rx kill <name>"
+    repo_ctx; connect; rcall kill "$wtid" "$1" - ;;
+  pull)
+    [ $# -ge 1 ] || die "usage: rx pull <path> [name]"
+    repo_ctx; find_rsync
+    src=rx/w/$wtid
+    [ -n "${2:-}" ] && src=rx/snap/$wtid-$2
+    mkdir -p .rx-out && echo '*' >.rx-out/.gitignore # keeps pulled data out of the next sync
+    connect
+    "$RSYNC" -a -s --no-owner --no-group -e "$(rsh)" "$HOST:$src/${rel:+$rel/}$1" .rx-out/ ||
+      fail "pull failed" ;;
+  sh)
+    repo_ctx; connect
+    q=\'$(printf '%s' "rx/w/$wtid/$rel" | sed "s/'/'\\\\''/g")\'
+    exec "${SSH[@]}" -t "$HOST" "touch .rx/last-activity 2>/dev/null; cd $q 2>/dev/null || cd rx/w/$wtid 2>/dev/null; exec bash -l" ;;
+  up)
+    if [ -n "${RX_GCE_INSTANCE:-}" ]; then probe || wake; else connect; fi
+    rcall status ;;
+  status)
+    [ -n "${RX_GCE_INSTANCE:-}" ] && echo "instance $RX_GCE_INSTANCE: $(gce instances describe "$RX_GCE_INSTANCE" --format='value(status)')"
+    if probe; then rcall status; else echo "box: unreachable over ssh"; fi ;;
+  stop)
+    if probe; then
+      n=$(rcall status | sed -n 's/^running rx jobs: *//p')
+      [ "${n:-0}" = 0 ] || [ "${1:-}" = -f ] || die "$n rx jobs still running (rx ps -a); use rx stop -f"
+    fi
+    [ -n "${RX_GCE_INSTANCE:-}" ] || die "RX_GCE_INSTANCE not set"
+    "${SSH[@]}" -O exit "$HOST" >/dev/null 2>&1
+    gce instances stop "$RX_GCE_INSTANCE" >/dev/null && echo "rx: stopped $RX_GCE_INSTANCE" >&2 ;;
+  grow)
+    case $#:${1:-} in 1:*[!0-9A-Za-z]* | 1: | [!1]:*) die "usage: rx grow <new size, e.g. 1000GB>" ;; esac
+    [ -n "${RX_GCE_DATA_DISK:-}" ] || die "RX_GCE_DATA_DISK not set"
+    gce disks resize "$RX_GCE_DATA_DISK" --size "$1" || fail "gcloud could not resize $RX_GCE_DATA_DISK"
+    connect; rcall grow ;;
+  *) sed -n '2,21p' "$SELF" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

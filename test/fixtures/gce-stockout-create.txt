@@ -1,0 +1,17 @@
+ERROR: (gcloud.compute.instances.create) Could not fetch resource:
+ - code: ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS
+   errorDetails:
+   - errorInfo:
+       domain: compute.googleapis.com
+       metadatas:
+         vmType: c3d-standard-60
+         zone: test-zone-a
+       reason: resource_availability
+   - help:
+       links:
+       - description: Troubleshooting documentation
+         url: https://cloud.google.com/compute/docs/resource-error
+   - localizedMessage:
+       locale: en-US
+       message: A c3d-standard-60 VM instance is currently unavailable in the test-zone-a zone. Alternatively, you can try your request again with a different VM hardware configuration or at a later time. For more information, see the troubleshooting documentation.
+   message: The zone 'projects/test-project/zones/test-zone-a' does not have enough resources available to fulfill the request.  '(resource type:compute)'. (state:STOCKOUT, sub-state:STOCKOUT_SPOT)
