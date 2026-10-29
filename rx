@@ -2,7 +2,7 @@
 # rx: run heavy commands for the current git worktree on a remote Linux build box.
 #
 #   rx run [--] <cmd...>                  sync, run in this worktree's box dir, stream, exit with its code
-#   rx submit [--mem 64G] <name> [--] <cmd...>  sync a private (warm, reused) snapshot, start detached
+#   rx submit [--mem 64G] <name> [--] <cmd...>  sync a private snapshot, start detached, return
 #   rx wait <name>                        reattach: stream the log, exit with the job's code
 #   rx logs <name> [n]                    last n lines of a job's log (default 200)
 #   rx ps [-a]                            jobs of this worktree (-a: all worktrees)
@@ -26,7 +26,7 @@ fail() { echo "rx: $*" >&2; exit 255; }
 
 # ============================ box half =====================================
 # Runs on the box as ~/.rx/bin/rx-<hash> __remote <stage-dir> <subcommand> [args].
-# Box layout: ~/rx/w/<wtid> mirrors, ~/rx/snap/<wtid>/s<N> reusable job snapshot slots,
+# Box layout: ~/rx/w/<wtid> mirrors, ~/rx/snap/<wtid>-<name> job snapshots,
 # ~/rx/m/<dir-id> last-synced manifests, ~/rx/jobs/<wtid>/<name>/ job state and log.
 
 b_busy() { # unit
@@ -80,43 +80,6 @@ b_slices() {
   printf '[Slice]\nCPUWeight=100\n' >"$d/rx-job.slice"
   systemctl --user daemon-reload
 }
-# Snapshot slots: each worktree has up to $ST/maxslots dirs snap/<wtid>/s<N>, reused across jobs so
-# their mbx target (keyed by path) stays warm. A slot is busy while a recv holds its lock (sync in
-# progress) or its last job (snap/<wtid>/s<N>.job: "name token") is still running.
-b_slot_free() { # wtid slot
-  local n='' t='' J
-  exec 6>>"$HOME/.rx/lock/$1-$2"
-  flock -n 6 || { exec 6>&-; return 1; }
-  flock -u 6; exec 6>&-
-  read -r n t 2>/dev/null <"$B/snap/$1/$2.job"
-  [ -n "$n" ] || return 0
-  J=$(readlink -e "$B/jobs/$1/.$n@$t") || return 0
-  [ -e "$J/exit" ] || ! b_busy "rx-$1-$n" || [ "$(readlink -e "$B/jobs/$1/$n")" != "$J" ]
-}
-b_slot() { # wtid name max token|-: sets SLOT and NEW. With a token, claims it (lock on fd 6 + .job)
-  local P=$B/snap/$1 f s i
-  SLOT='' NEW=''
-  mkdir -p "$P"
-  exec 5>>"$HOME/.rx/lock/$1-snap"
-  flock 5
-  # this name's last slot first, then the most recently used free one, else a new one
-  # shellcheck disable=SC2012 # slot files are s<N>.job
-  for f in $(grep -l "^$2 " "$P"/s*.job 2>/dev/null; ls -t "$P"/s*.job 2>/dev/null); do
-    s=${f##*/} s=${s%.job}
-    b_slot_free "$1" "$s" && { SLOT=$s; break; }
-  done
-  if [ -z "$SLOT" ]; then
-    for ((i = 1; i <= $3; i++)); do
-      [ -e "$P/s$i.job" ] || [ -e "$P/s$i" ] || { SLOT=s$i NEW=1; break; }
-    done
-  fi
-  if [ -n "$SLOT" ] && [ "$4" != - ]; then
-    exec 6>>"$HOME/.rx/lock/$1-$SLOT"
-    flock -n 6 && printf '%s %s\n' "$2" "$4" >"$P/$SLOT.job" || SLOT=''
-  fi
-  flock -u 5
-  [ -n "$SLOT" ] || { echo "rx: all $3 snapshot slots of this worktree are busy; wait for a job (rx ps) or rx kill one" >&2; return 2; }
-}
 b_recv() { # rsync --server args...: lock, wait or refuse, prepare dest, sync, start; all under one lock
   local mode wtid name unit dest mf J dir slice i rc said='' props=()
   mode=$(cat "$ST/mode") wtid=$(cat "$ST/wtid") name=$(cat "$ST/name")
@@ -132,26 +95,19 @@ b_recv() { # rsync --server args...: lock, wait or refuse, prepare dest, sync, s
     sleep 1
   done
   if [ "$mode" = submit ]; then
-    b_slot "$wtid" "$name" "$(cat "$ST/maxslots")" "$(cat "$ST/token")" || exit 2
-    dest=$B/snap/$wtid/$SLOT mf=$B/m/$wtid.$SLOT
-    if [ -n "$NEW" ] || [ ! -d "$dest" ]; then # new slot: reflink copy of the warm mirror
-      rm -rf "$dest" "$mf"
-      mkdir -p "$B/w/$wtid"
-      exec 7>>"$HOME/.rx/lock/$wtid-run"
-      flock 7
-      cp -a --reflink=auto "$B/w/$wtid" "$dest" && { [ ! -f "$B/m/$wtid" ] || cp "$B/m/$wtid" "$mf"; } || exit 1
-      flock -u 7
-      find "$dest" -maxdepth 4 -name target -type l -delete # mbx target links: the slot gets its own
-      echo "rx: $name: new snapshot slot $SLOT" >&2
-    else # reused slot: manifest sync like the mirror; its own target stays warm
-      echo "rx: $name: reusing snapshot slot $SLOT (warm build dir)" >&2
-    fi
+    dest=$B/snap/$wtid-$name mf=$B/m/$wtid-$name
+    rm -rf "$dest" "$mf"
+    mkdir -p "$B/w/$wtid"
+    exec 7>>"$HOME/.rx/lock/$wtid-run"
+    flock 7
+    cp -a --reflink=auto "$B/w/$wtid" "$dest" && { [ ! -f "$B/m/$wtid" ] || cp "$B/m/$wtid" "$mf"; } || exit 1
+    flock -u 7
+    find "$dest" -maxdepth 4 -name target -type l -delete # mbx target links: the job gets its own
   else
     dest=$B/w/$wtid mf=$B/m/$wtid
   fi
   mkdir -p "$dest"
   b_deletions "$dest" "$mf" "$ST/manifest"
-  set -- "${@:1:$#-1}" "$dest/" # the box picks the destination (the slot), not the client
   rsync "$@" || exit
   b_rm "$dest" <"$ST/missing" # rsync --delete-missing-args removed these; drop emptied dirs too
   cp "$ST/manifest" "$mf"
@@ -165,7 +121,6 @@ b_recv() { # rsync --server args...: lock, wait or refuse, prepare dest, sync, s
   dir=$(cd "$dest" && pwd -P)
   printf '%s' "$dir" >"$J/dest"
   printf '%s' "$dest" >"$J/ldest"
-  [ "$mode" = run ] || printf '%s' "$SLOT" >"$J/slot"
   printf '%s' "$dir/$(cat "$ST/rel")" >"$J/dir"
   b_boot >"$J/boot"
   date '+%Y-%m-%d %H:%M' >"$J/started"
@@ -235,25 +190,15 @@ b_main() {
   case $sub in
     stage) # pre-check so a refused submit fails before any transfer (recv re-checks under the lock)
       J=$(cat "$ST/name")
-      if [ "$(cat "$ST/mode")" = submit ]; then
-        b_busy "rx-$(cat "$ST/wtid")-$J" && { rm -rf "$ST"; die "job $J is still running (rx wait $J, rx kill $J)"; }
-        b_slot "$(cat "$ST/wtid")" "$J" "$(cat "$ST/maxslots")" - || { rm -rf "$ST"; exit 2; }
+      if [ "$(cat "$ST/mode")" = submit ] && b_busy "rx-$(cat "$ST/wtid")-$J"; then
+        rm -rf "$ST"
+        die "job $J is still running (rx wait $J, rx kill $J)"
       fi
       b_disk >/dev/null ;;
     recv) b_recv "$@" ;;
     job) b_job "$1" ;;
     follow) b_follow "$@" ;;
     jstate) J=$(b_inst "$@") && b_status "$J" "rx-$1-$2" ;;
-    snapdir) # wtid name: the box dir holding a job's files, for rx pull
-      J=$(b_inst "$1" "$2" -) || die "no such job: $2"
-      [ -d "$B/snap/$1-$2" ] && [ ! -s "$J/slot" ] && { echo "rx/snap/$1-$2"; exit; } # pre-slot layout
-      [ -s "$J/slot" ] || { echo "rx/w/$1"; exit; } # rx run jobs use the worktree dir
-      read -r n t 2>/dev/null <"$B/snap/$1/$(cat "$J/slot").job"
-      if [ "${n:-} ${t:-}" != "$2 $(cat "$J/token")" ]; then
-        [ "${n:-}" = "$2" ] && n="a later $2"
-        echo "rx: warning: $2's snapshot was reused by ${n:-another job}; files may be newer" >&2
-      fi
-      echo "rx/snap/$1/$(cat "$J/slot")" ;;
     ps) b_ps "$1" ;;
     logs)
       J=$B/jobs/$1/$2
@@ -391,8 +336,6 @@ prepare_job() { # mode name cmd...: write the job spec into the stage dir
   stage_dir
   printf '%s' "$1" >"$ST/mode"; printf '%s' "$wtid" >"$ST/wtid"; printf '%s' "$2" >"$ST/name"
   printf '%s' "$root" >"$ST/root"; printf '%s' "$rel" >"$ST/rel"; printf '%s' "${MEM:-}" >"$ST/mem"
-  case ${RX_MAX_SNAPSHOTS:-6} in '' | *[!0-9]*) die "bad RX_MAX_SNAPSHOTS: $RX_MAX_SNAPSHOTS" ;; esac
-  printf '%s' "${RX_MAX_SNAPSHOTS:-6}" >"$ST/maxslots"
   shift 2
   printf '%s\0' "$@" >"$ST/argv"
   if [ $# -eq 1 ]; then printf '%s' "$1" >"$ST/cmd"; else printf '%q ' "$@" >"$ST/cmd"; fi
@@ -419,7 +362,7 @@ prepare_job() { # mode name cmd...: write the job spec into the stage dir
 }
 sync_start() { # mode name: one rsync whose box side locks, syncs and starts the job
   local dest=rx/w/$wtid rc
-  [ "$1" = submit ] && dest=rx/snap/$wtid # the box picks the slot
+  [ "$1" = submit ] && dest=rx/snap/$wtid-$2
   find_rsync
   rcall stage || exit
   "$RSYNC" -a --no-owner --no-group --files-from="$ST/manifest" --from0 --delete-missing-args \
@@ -487,10 +430,11 @@ case $cmd in
     repo_ctx; connect; rcall kill "$wtid" "$1" - ;;
   pull)
     [ $# -ge 1 ] || die "usage: rx pull <path> [name]"
-    repo_ctx; find_rsync; connect
+    repo_ctx; find_rsync
     src=rx/w/$wtid
-    if [ -n "${2:-}" ]; then src=$(rcall snapdir "$wtid" "$2") || exit; fi
+    [ -n "${2:-}" ] && src=rx/snap/$wtid-$2
     mkdir -p .rx-out && echo '*' >.rx-out/.gitignore # keeps pulled data out of the next sync
+    connect
     "$RSYNC" -a -s --no-owner --no-group -e "$(rsh)" "$HOST:$src/${rel:+$rel/}$1" .rx-out/ ||
       fail "pull failed" ;;
   sh)

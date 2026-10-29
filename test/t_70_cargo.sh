@@ -53,23 +53,14 @@ rx run -- cargo test >/dev/null 2>&1 || nok "cargo test after restoring the sour
 rx submit cargojob -- cargo test --quiet >/dev/null 2>&1
 rx wait cargojob >"$W/cargojob.out" 2>&1; rc=$?
 eq "submitted cargo test passes" 0 $rc
-id=$(basename "$D")
-S=$(box "echo ~/rx/snap/$id/\$(cat ~/rx/jobs/$id/cargojob/slot)")
+S=$(box "echo ~/rx/snap/$(basename "$D")-cargojob")
 t1=$(box "readlink $D/target") t2=$(box "readlink $S/target")
 [ -n "$t2" ] && [ "$t1" != "$t2" ] && ok "snapshot got its own managed target ($t2)" || nok "snapshot shares the worktree target" "$t1 vs $t2"
 
+rx submit cargojob -- cargo test >/dev/null 2>&1
+out=$(rx wait cargojob 2>&1); rc=$?
+eq "rerun under the same name passes" 0 $rc
+hasnt "rerun under the same name builds warm" "Compiling tinycrate" "$out"
+
 out=$(rx run -- cargo test 2>&1)
 hasnt "the worktree's target is still warm after the job" "Compiling tinycrate" "$out"
-
-# A rerun under a NEW name reuses the slot and its managed target: warm, not a cold build.
-out=$(rx submit cargojob2 -- cargo test 2>&1)
-has "second submit with another name reuses the slot" "reusing snapshot slot" "$out"
-out=$(rx wait cargojob2 2>&1); rc=$?
-eq "reused-slot cargo test passes" 0 $rc
-hasnt "reused slot is warm (no recompile)" "Compiling tinycrate" "$out"
-eq "reused slot kept its managed target" "$t2" "$(box "readlink $S/target")"
-sed -i '' 's/a + b$/a + b + 0/' src/lib.rs
-rx submit cargojob3 -- cargo test >/dev/null 2>&1
-out=$(rx wait cargojob3 2>&1); rc=$?
-eq "after a small edit the reused slot rebuilds incrementally and passes" 0 $rc
-has "only the edited crate recompiles" "Compiling tinycrate" "$out"
