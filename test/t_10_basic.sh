@@ -72,3 +72,11 @@ eq "PATH block is the first line of ~/.bashrc" "# >>> rx toolchain (managed by s
 eq "exactly one block in .bashrc and .profile after reruns" "1 1" "$(box 'echo $(grep -c "^# >>> rx toolchain" ~/.bashrc) $(grep -c "^# >>> rx toolchain" ~/.profile)')"
 eq "legacy .profile PATH lines removed" 0 "$(box 'grep -c "legacy\|rx: toolchain PATH" ~/.profile')"
 has "Ubuntu's interactive guard still follows" 'case $- in' "$(box 'cat ~/.bashrc')"
+
+# Not in a worktree, but worktrees sit just below (a track dir): suggest them.
+trk=$(mktemp -d /tmp/rxt-track.XXXXXX)
+git init -q "$trk/wt" && mkdir -p "$trk/nested" && git init -q "$trk/nested/wt2" && mkdir -p "$trk/deep/a/b" && git init -q "$trk/deep/a/b/c"
+out=$(cd "$trk" && rx run -- true 2>&1); rc=$?
+eq "track dir: exit 2" 2 $rc
+eq "track dir: suggests worktrees within depth 2" "rx: not inside a git worktree; did you mean: cd nested/wt2, cd wt" "$out"
+rm -rf "$trk"

@@ -315,7 +315,12 @@ rsh() { # ssh command as one string for rsync -e (rsync splits on spaces, honors
   printf '%s' "${s# }"
 }
 repo_ctx() {
-  root=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git worktree"
+  local hint
+  if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then # e.g. a track dir with the worktree below
+    hint=$(find . -mindepth 2 -maxdepth 3 -name .git -prune 2>/dev/null | sed 's|^\./||; s|/\.git$||' | LC_ALL=C sort | head -3 |
+      sed 's/^/cd /' | paste -sd, - | sed 's/,/, /g')
+    die "not inside a git worktree${hint:+; did you mean: $hint}"
+  fi
   local cwd common repo
   cwd=$(pwd -P) rel=${cwd#"$root"} rel=${rel#/}
   common=$(cd "$root" && cd "$(git rev-parse --git-common-dir)" && pwd -P)
