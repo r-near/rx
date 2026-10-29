@@ -63,14 +63,19 @@ rx submit oldjob -- 'echo old' >/dev/null 2>&1; rx wait oldjob >/dev/null 2>&1
 rx submit newjob -- 'echo new' >/dev/null 2>&1; rx wait newjob >/dev/null 2>&1
 D=$(wtdir); id=$(basename "$D")
 box "mkdir -p ~/rx/w/stale_repo-0000000000/src && echo x >~/rx/w/stale_repo-0000000000/src/f && printf 'src/f\0' >~/rx/m/stale_repo-0000000000 &&
-  touch -d '-15 days' ~/rx/m/stale_repo-0000000000 && touch -d '-4 days' ~/rx/jobs/$id/.oldjob@*/log"
+  touch -d '-15 days' ~/rx/m/stale_repo-0000000000 && touch -d '-4 days' ~/rx/jobs/$id/.oldjob@*/log &&
+  mkdir -p ~/rx/snap/$id/s9 && echo gone-job tok >~/rx/snap/$id/s9.job && touch ~/rx/m/$id.s9 && touch -d '-4 days' ~/rx/snap/$id/s9.job &&
+  mkdir -p ~/rx/snap/$id-legacyjob && touch ~/rx/m/$id-legacyjob"
 out=$(box 'rx-box cleanup --dry-run')
 has "cleanup dry run lists the stale worktree" "remove /home/dev/rx/w/stale_repo-0000000000" "$out"
 has "cleanup dry run lists the old job" "/.oldjob@" "$out"
 box 'test -d ~/rx/w/stale_repo-0000000000' && ok "dry run deletes nothing" || nok "dry run deleted"
 box 'rx-box cleanup' >/dev/null
 box 'test ! -e ~/rx/w/stale_repo-0000000000 && test ! -e ~/rx/m/stale_repo-0000000000' && ok "stale worktree dir pruned" || nok "stale worktree kept"
-box "test ! -e ~/rx/jobs/$id/oldjob && test ! -e ~/rx/snap/$id-oldjob" && ok "old job, its link and snapshot pruned" || nok "old job kept"
+box "test ! -e ~/rx/jobs/$id/oldjob" && ok "old job record and its link pruned" || nok "old job kept"
+box "test ! -e ~/rx/snap/$id/s9 && test ! -e ~/rx/snap/$id/s9.job && test ! -e ~/rx/m/$id.s9" && ok "unused snapshot slot pruned" || nok "stale slot kept"
+box "test -d ~/rx/snap/$id/\$(cat ~/rx/jobs/$id/newjob/slot)" && ok "recently used snapshot slot kept" || nok "recent slot pruned"
+box "test ! -e ~/rx/snap/$id-legacyjob && test ! -e ~/rx/m/$id-legacyjob" && ok "pre-slot snapshot dir removed right away" || nok "legacy snapshot kept"
 box "test -d $D && test -e ~/rx/jobs/$id/newjob" && ok "recent worktree and job kept" || nok "recent data pruned"
 out=$(rx ps); hasnt "ps no longer lists the pruned job" oldjob "$out"
 has "ps still lists the recent job" newjob "$out"

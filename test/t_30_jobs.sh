@@ -101,3 +101,52 @@ has "kill with a superseded run's token refuses" "a newer run replaced it" "$out
 box "systemctl --user -q is-active $U" && ok "the newer run keeps running" || nok "stale token killed the newer run"
 rx kill run >/dev/null 2>&1
 wait $p2; eq "plain rx kill stops the newest run (its client sees 143)" 143 $?
+
+# Snapshot slot pool: per-worktree slots are reused across job names (warm), never while busy.
+mkrepo slots
+echo v1 >version && echo old >old.txt && git add -A
+rx run -- true >/dev/null
+id=$(basename "$(wtdir)")
+slot_of() { box "cat ~/rx/jobs/$id/$1/slot"; }
+out=$(rx submit sa -- 'ln -sfn /tmp/slot-target-a target; cat version' 2>&1)
+has "first submit creates a new slot" "new snapshot slot s1" "$out"
+rx wait sa >/dev/null 2>&1
+echo v2 >version && git rm -qf old.txt
+out=$(rx submit sb -- 'readlink target; cat version; test -e old.txt || echo old-gone' 2>&1)
+has "submit says it reuses the slot" "reusing snapshot slot s1" "$out"
+out=$(rx wait sb 2>&1)
+eq "reused slot keeps its target symlink, gets new content and deletions" "/tmp/slot-target-a
+v2
+old-gone" "$out"
+eq "both jobs recorded slot s1" "s1 s1" "$(slot_of sa) $(slot_of sb)"
+
+rx submit slong -- 'sleep 6; cat version' >/dev/null 2>&1
+echo v3 >version
+out=$(rx submit sother -- 'cat version' 2>&1)
+has "a busy slot is never reused: new slot instead" "new snapshot slot s2" "$out"
+eq "busy job and new job in different slots" "s1 s2" "$(slot_of slong) $(slot_of sother)"
+eq "job in the new slot sees the new content" v3 "$(rx wait sother 2>/dev/null)"
+eq "the busy slot stayed frozen" v2 "$(rx wait slong 2>/dev/null)"
+out=$(rx submit slong -- 'cat version' 2>&1)
+has "a rerun of a name prefers its last slot" "reusing snapshot slot s1" "$out"
+rx wait slong >/dev/null 2>&1
+
+rx submit p1 -- 'sleep 4' >/dev/null 2>&1 &
+rx submit p2 -- 'sleep 4' >/dev/null 2>&1 &
+wait
+eq "simultaneous submits get distinct slots" "s1 s2" "$(printf "%s\n" "$(slot_of p1)" "$(slot_of p2)" | sort | paste -sd" " -)"
+out=$(RX_MAX_SNAPSHOTS=2 rx submit p3 -- true 2>&1); rc=$?
+eq "slot cap reached: refused with exit 2" 2 $rc
+has "slot cap reached: clear message" "all 2 snapshot slots of this worktree are busy" "$out"
+hasnt "slot cap refusal is clean (no rsync noise)" "rsync" "$out"
+out=$(rx submit p3 -- true 2>&1)
+has "under the default cap a third slot is created" "new snapshot slot s3" "$out"
+rx kill p1 >/dev/null 2>&1; rx kill p2 >/dev/null 2>&1; rx wait p3 >/dev/null 2>&1
+
+rx submit w1 -- 'echo one >out.txt' >/dev/null 2>&1; rx wait w1 >/dev/null 2>&1
+rx submit w2 -- 'echo two >out.txt' >/dev/null 2>&1; rx wait w2 >/dev/null 2>&1
+eq "w2 reused w1's slot" "$(slot_of w1)" "$(slot_of w2)"
+out=$(rx pull out.txt w1 2>&1)
+has "pull after reuse warns" "rx: warning: w1's snapshot was reused by w2; files may be newer" "$out"
+eq "pull after reuse gets the slot's current files" two "$(cat .rx-out/out.txt)"
+out=$(rx pull out.txt w2 2>&1); hasnt "pull of the slot's own last job: no warning" warning "$out"

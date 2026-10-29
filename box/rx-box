@@ -6,6 +6,8 @@
 # Powers off once there have been no active rx units and no ssh sessions (OpenSSH or Tailscale SSH)
 # for the whole limit, and ~/.rx/last-activity is at least the limit old: about 30 minutes after the
 # last rx call or session ends, give or take one 5-minute tick.
+# Cleanup: worktree mirrors untouched for RX_KEEP_DAYS, job records and snapshot slots unused for
+# RX_JOB_DAYS, and right away any pre-slot snapshot dirs (snap/<wtid>-<name>, never reused).
 # Tunables (env): RX_IDLE_MIN=30 RX_IDLE_STATE=/run/rx-idle-since RX_KEEP_DAYS=14 RX_JOB_DAYS=3
 set -u
 cmd=${1:-} dry='' user=dev
@@ -67,7 +69,7 @@ idle() {
 }
 
 cleanup() { # prune worktree dirs untouched for RX_KEEP_DAYS and finished jobs older than RX_JOB_DAYS
-  local B=$HOME/rx keep=$((${RX_KEEP_DAYS:-14} * 1440)) jobs=$((${RX_JOB_DAYS:-3} * 1440)) d id J n w
+  local B=$HOME/rx keep=$((${RX_KEEP_DAYS:-14} * 1440)) jobs=$((${RX_JOB_DAYS:-3} * 1440)) d id J n w f s
   export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
   running() { systemctl --user list-units "rx-$1.service" --state=active,activating,deactivating --no-legend | grep -q .; }
   del() { echo "remove $*"; [ -n "$dry" ] || rm -rf "$@"; }
@@ -76,7 +78,7 @@ cleanup() { # prune worktree dirs untouched for RX_KEEP_DAYS and finished jobs o
     id=$(basename "$d")
     [ -e "$B/m/$id" ] && w=$B/m/$id || w=$d
     [ "$(age_min "$w")" -ge "$keep" ] && ! running "$id-*" &&
-      del "$B/w/$id" "$B/m/$id" "$B/jobs/$id" "$B"/snap/"$id"-* "$B"/m/"$id"-*
+      del "$B/w/$id" "$B/m/$id" "$B/jobs/$id" "$B/snap/$id" "$B"/m/"$id".s* "$B"/snap/"$id"-* "$B"/m/"$id"-*
   done
   for J in "$B"/jobs/*/.*@*/; do # job instances: jobs/<wtid>/.<name>@<token>/
     [ -d "$J" ] || continue
@@ -84,7 +86,21 @@ cleanup() { # prune worktree dirs untouched for RX_KEEP_DAYS and finished jobs o
     [ -e "$J/exit" ] || ! running "$id-$n" || continue
     [ "$(age_min "$J/log")" -ge "$jobs" ] || continue
     del "$J"
-    [ -e "$B/jobs/$id/$n" ] || del "$B/jobs/$id/$n" "$B/snap/$id-$n" "$B/m/$id-$n" # link now dangling
+    [ -e "$B/jobs/$id/$n" ] || del "$B/jobs/$id/$n" # link now dangling
+  done
+  for f in "$B"/snap/*/s*.job; do # snapshot slots: snap/<wtid>/s<N> + s<N>.job ("name token")
+    [ -e "$f" ] || continue
+    id=$(basename "$(dirname "$f")") s=$(basename "$f" .job) n=''
+    read -r n _ <"$f"
+    [ "$(age_min "$f")" -ge "$jobs" ] || continue
+    { [ -n "$n" ] && running "$id-$n"; } && continue
+    flock -n "$HOME/.rx/lock/$id-$s" true || continue # a submit is syncing into it
+    del "$B/snap/$id/$s" "$f" "$B/m/$id.$s"
+  done
+  for d in "$B"/snap/*-*-*/; do # pre-slot snapshots (snap/<wtid>-<name>; wtids have one dash)
+    [ -d "$d" ] || continue
+    id=$(basename "$d")
+    running "$id" || del "$B/snap/$id" "$B/m/$id"
   done
   find "$HOME/.rx/stage" -mindepth 1 -maxdepth 1 -mmin +1440 -exec sh -c 'echo "remove $1"; [ -n "$2" ] || rm -rf "$1"' _ {} "$dry" \; 2>/dev/null
   find "$HOME/.rx/bin" -name 'rx-*' -mtime +30 -exec sh -c 'echo "remove $1"; [ -n "$2" ] || rm -f "$1"' _ {} "$dry" \; 2>/dev/null
