@@ -18,7 +18,7 @@ brew install rsync                       # needs upstream rsync >= 3.1; /usr/bin
 ln -s "$PWD/rx" ~/.local/bin/rx          # or /usr/local/bin: a dir on the *default* PATH
 mkdir -p ~/.config/rx && cat >~/.config/rx/config <<'EOF'
 RX_HOST=buildbox                         # ssh alias (Tailscale SSH in production)
-RX_GCE_INSTANCE=buildbox RX_GCE_ZONE=us-central1-a RX_GCE_PROJECT=your-project
+RX_GCE_INSTANCE=buildbox RX_GCE_ZONE=your-zone RX_GCE_PROJECT=your-project
 RX_GCE_DATA_DISK=buildbox-data
 EOF
 ```
@@ -36,7 +36,7 @@ Codex: its workspace-write sandbox blocks network access by default, so `rx`'s s
 
 Set up the box with [`box/setup.sh`](box/README.md). The client is one bash file that runs under macOS `/bin/bash` 3.2. Agents get [`skill/SKILL.md`](skill/SKILL.md), or the short [`AGENTS-snippet.md`](AGENTS-snippet.md).
 
-Config is sourced from `~/.config/rx/config` (or `$RX_CONFIG`): `RX_HOST`, `RX_GCE_INSTANCE`, `RX_GCE_ZONE`, `RX_GCE_PROJECT`, `RX_GCE_DATA_DISK`, `RX_SSH_CONFIG` (passed as `ssh -F`), and `RX_ENV`. `RX_ENV` lists the env var names forwarded to jobs (default `RUST_LOG RUST_BACKTRACE`); nothing else from your environment goes over. Jobs get `CARGO_TERM_COLOR=never` unless you forward your own.
+Config is sourced from `~/.config/rx/config` (or `$RX_CONFIG`): `RX_HOST`, `RX_GCE_INSTANCE`, `RX_GCE_ZONE`, `RX_GCE_PROJECT`, `RX_GCE_DATA_DISK`, `RX_SSH_CONFIG` (passed as `ssh -F`), `RX_MAX_SNAPSHOTS` (default 6), and `RX_ENV`. `RX_ENV` lists the env var names forwarded to jobs (default `RUST_LOG RUST_BACKTRACE`); nothing else from your environment goes over. Jobs get `CARGO_TERM_COLOR=never` unless you forward your own.
 
 ## Exit codes
 
@@ -47,11 +47,12 @@ Config is sourced from `~/.config/rx/config` (or `$RX_CONFIG`): `RX_HOST`, `RX_G
 | 143 | the job was killed or stopped; or rx itself got TERM/HUP and detached (the job keeps running) |
 | 255 | box unreachable, connection lost, or the job was lost because the box restarted |
 | 75 | wake failed because the Spot zone is stocked out; try again later |
-| 2 | usage error, or refused (e.g. `submit` with a name that's still running) |
+| 2 | usage error, or refused (e.g. `submit` with a name that's still running, or all snapshot slots busy) |
 
 ## How it works
 
-- **Remote dirs.** Each worktree gets `~/rx/w/<repo>-<hash of the worktree path>` on the box, so worktrees never collide. `rx run` uses it in place, so builds stay warm. `rx submit` makes a `cp -a --reflink` snapshot in `~/rx/snap/` (instant on XFS), so later syncs and edits never touch a running job. The snapshot drops `target` symlinks so mbx gives it its own target dir and lock.
+- **Remote dirs.** Each worktree gets `~/rx/w/<repo>-<hash of the worktree path>` on the box, so worktrees never collide. `rx run` uses it in place, so builds stay warm. `rx submit` runs in a snapshot slot from a small per-worktree pool, `~/rx/snap/<wtid>/s<N>`. It picks a free slot (no running job in it), preferring the one this job name used last, then the most recently used. A reused slot is synced like the mirror (manifest-based, deleting only files that left it) and keeps its own `target` symlink, so reruns, even under a new name, build warm. A new slot is a `cp -a --reflink` of the mirror (instant on XFS) minus `target` symlinks, so mbx gives it its own target dir and lock. When all `RX_MAX_SNAPSHOTS` (6) slots are busy, submit refuses with exit 2. A running job's slot is never synced into, so later edits never touch it. `rx pull <path> <name>` reads that job's slot and warns if a later job has reused it since.
+- **Latency.** Each call costs a few ssh round trips (the ControlMaster saves the handshake), so about 10 s per submit to a box in a far region. RTT matters more than bandwidth. `rx run` is the fast path: one call, the warmest dir, and output streams as it's produced.
 - **Sync.** The file set is `git ls-files --cached --others --exclude-standard`, so `.gitignore`, `.git/info/exclude` and global excludes apply. Untracked symlinks (e.g. a local mbx `target`) and `.git` are never sent. The box keeps the last manifest and deletes exactly the paths that left it (plus tracked files deleted locally), so build output, fuzz corpora and the box's own `target` symlink are never deleted. rsync `-a` keeps mtimes, so cargo doesn't rebuild needlessly.
 - **One lock.** The client's rsync starts its box side through `rx __remote recv`. That takes a box-side `flock`, waits for (run) or refuses (submit) a still-active job of that name, deletes, receives, and starts the systemd unit, all under the same lock. A second `rx run` in the same worktree waits for the first.
 - **Jobs.** Each job is a `systemd-run --user --collect` unit (linger is on) whose log and exit code live in `~/rx/jobs/<wtid>/.<name>@<token>/`. Stopping the unit kills its whole cgroup, setsid'd children included. `rx run` units go in `rx-run.slice` (CPUWeight 1000) and submitted ones in `rx-job.slice` (CPUWeight 100), so fuzzers can't starve interactive builds. `submit --mem 64G` sets MemoryMax.

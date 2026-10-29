@@ -19,7 +19,7 @@ Box layout, all on one XFS data filesystem so reflinks work between them:
 | Path | Contents |
 | --- | --- |
 | `/data` | data disk mount (fstab by UUID, `xfs defaults,nofail 0 2`) |
-| `/data/rx` | rx root; `~dev/rx` is a symlink to it. `w/` worktree mirrors, `snap/` job snapshots, `m/` manifests, `jobs/` job state and logs |
+| `/data/rx` | rx root; `~dev/rx` is a symlink to it. `w/` worktree mirrors, `snap/<wtid>/s<N>` reusable job snapshot slots, `m/` manifests, `jobs/` job state and logs |
 | `/data/mbx` | mbx `cache_dir` (store and managed targets) |
 | `/data/docker` | Docker `data-root` (`/etc/docker/daemon.json`) |
 
@@ -37,7 +37,7 @@ sudo ./setup.sh [--user dev] [--data-disk DEV | --data-loop FILE:SIZE] [--mbx-bu
 What setup.sh owns: the `dev` user with passwordless sudo and linger, the data disk, Docker with buildx (data-root on `/data`), rustup with stable and nightly, mise with Node LTS (`mise use -g node@lts`), mbx, mold, cargo-binstall, cargo-nextest, cargo-fuzz and cargo-llvm-cov, Temurin 21 with `tla2tools.jar` (`tlc` wrapper), build deps, the utilities (jq, ripgrep, fd, fzf, bat, eza, zoxide, tmux, btop, ncdu), unattended security upgrades without automatic reboots, the `tailscale` package, and two timers:
 
 - `rx-idle.timer`, every 5 minutes, runs `rx-box idle`. It powers off once there have been no active rx units and no ssh sessions for 30 straight minutes and the last rx call (`~/.rx/last-activity`) is at least 30 minutes old. That's about 30 minutes after the last rx call or session ends, give or take one tick. An idle ControlMaster counts as a session until `ControlPersist` (15 minutes) expires.
-- `rx-cleanup.timer`, daily, runs `rx-box cleanup`. It prunes worktree mirrors untouched for 14 days and finished jobs (log and snapshot) older than 3 days.
+- `rx-cleanup.timer`, daily, runs `rx-box cleanup`. It prunes worktree mirrors (and their slots) untouched for 14 days, finished job logs older than 3 days, and snapshot slots whose last job finished more than 3 days ago. It removes pre-slot `snap/<wtid>-<name>` dirs right away unless their job is still running.
 
 It doesn't create the VM, set up networking, or run `tailscale up`.
 
@@ -52,10 +52,10 @@ Counts based on port 22, `who` or `loginctl` would miss Tailscale SSH. This was 
 
 ## Create the VM (what worked on the real box; fill in the placeholders)
 
-Placeholders: `PROJECT`, `ZONE` (e.g. `us-central1-a`), `REGION` (e.g. `us-central1`). No secrets appear on any command line or in metadata.
+Placeholders: `PROJECT`, `ZONE` and its `REGION`. Pick the zone with the lowest RTT from the Mac: every rx call pays a few round trips (see the main README). No secrets appear on any command line or in metadata.
 
 ```sh
-PROJECT=your-project ZONE=us-central1-a REGION=us-central1 NAME=buildbox
+PROJECT=your-project ZONE=your-zone REGION=your-region NAME=buildbox
 
 # A dedicated VPC with ZERO firewall rules: no ingress at all. Never use the project's `default`
 # network, which may carry 0.0.0.0/0 ingress rules. Egress is allowed by GCP's implied rule.
@@ -148,7 +148,7 @@ Host buildbox
 ```sh
 # ~/.config/rx/config
 RX_HOST=buildbox
-RX_GCE_INSTANCE=buildbox RX_GCE_ZONE=us-central1-a RX_GCE_PROJECT=your-project
+RX_GCE_INSTANCE=buildbox RX_GCE_ZONE=your-zone RX_GCE_PROJECT=your-project
 RX_GCE_DATA_DISK=buildbox-data
 ```
 

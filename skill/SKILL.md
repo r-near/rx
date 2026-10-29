@@ -27,14 +27,19 @@ rx pull fuzz/artifacts fuzz-parser          # data into ./.rx-out/ (from that jo
 
 - After `--`, a single argument is a shell string (pipes, `&&`, globs work). Several arguments are run as an argv, word by word, with no shell.
 - Commands run in the box copy of your current directory. `rx run` reuses one warm dir per worktree; `rx sh` opens a shell there.
-- Job names are `[A-Za-z0-9_-]`, unique per worktree. `run` is the name of the `rx run` job. Pick descriptive names (`fuzz-parser`, `tlc-raft`) and reuse a name only after that job finishes; a name that's still running is refused.
+- Prefer `rx run` for anything that finishes within your tool timeout; its dir is the warmest and it has the least overhead. Use `submit` only for jobs that may outlive the timeout.
+- Job names are `[A-Za-z0-9_-]`; `run` is the `rx run` job. Reusing a finished job's name is fine and encouraged. Only a name that's still running is refused.
+- Keep output on stdout (`cmd 2>&1 | tee out.log`, not `>out.log`), so `rx logs` and `rx wait` show progress.
+- In shell strings, chain setup steps with `&&`, so a failed step doesn't run the job on missing files.
+- `.git` isn't synced. To apply a patch on the box, use `patch -p1 <x.patch`, not `git apply` or `git diff`.
 
 ## Rules
 
 1. **Linux artifacts stay on the box.** Run tests and binaries remotely. Pull only data (corpora, crash inputs, coverage reports, logs) with `rx pull`, never binaries to run on the Mac.
 2. **Timeouts detach; they don't kill.** If your shell timeout interrupts `rx run`, the job keeps running. Don't restart it. Run `rx ps` and then `rx wait run` to get the result. (A hard kill may skip the detach message, so check `rx ps` whenever a run was cut off.) Use `rx submit` up front for anything that may outlive your timeout, then `rx wait <name>`.
 3. **A second `rx run` in the same worktree waits** for the first. That's expected; don't kill the first to get ahead.
-4. **Submitted jobs run on a snapshot** taken at submit time. Edits you make afterwards don't reach them. Resubmit to test new code, and `rx pull <path> <name>` to get a job's outputs.
-5. **No secrets.** Only `RUST_LOG` and `RUST_BACKTRACE` are forwarded (more via `RX_ENV`). Untracked files that aren't gitignored are synced, so never put secrets in them, and never paste tokens into commands. If rx prints `warning: syncing untracked <path>, which looks like a secret`, tell the user.
-6. **Exit codes:** the command's own, 130 Ctrl-C, 143 killed (or rx detached), 255 box unreachable or job lost (box restarted, so rerun it), 75 box stocked out (retry later; don't loop tightly), 2 usage error or refused.
-7. **Clean up.** `rx kill` jobs you no longer need. When you finish, run `rx ps` and report any jobs you left running, with their names and how to check them (`rx wait <name>`).
+4. **Submitted jobs run on a snapshot** taken at submit time. Edits you make afterwards don't reach them. Resubmit to test new code, and `rx pull <path> <name>` to get a job's outputs. Snapshots are a small pool of warm slots reused across job names, so pull soon: a later submit may reuse the slot (rx warns).
+5. **No local locks or `-j` caps for rx.** Local shared-machine rules (build locks, `-j 2`) apply only to cargo on the Mac. Never hold a local lock while running or waiting on an rx job.
+6. **No secrets.** Only `RUST_LOG` and `RUST_BACKTRACE` are forwarded (more via `RX_ENV`). Untracked files that aren't gitignored are synced, so never put secrets in them, and never paste tokens into commands. If rx prints `warning: syncing untracked <path>, which looks like a secret`, tell the user.
+7. **Exit codes:** the command's own, 130 Ctrl-C, 143 killed (or rx detached), 255 box unreachable or job lost (box restarted, so rerun it), 75 box stocked out (retry later; don't loop tightly), 2 usage error or refused (including all snapshot slots busy).
+8. **Clean up.** `rx kill` jobs you no longer need. When you finish, run `rx ps` and report any jobs you left running, with their names and how to check them (`rx wait <name>`).
