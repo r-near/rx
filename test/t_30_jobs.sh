@@ -117,3 +117,7 @@ has "kill with a superseded run's token refuses" "a newer run replaced it" "$out
 box "systemctl --user -q is-active $U" && ok "the newer run keeps running" || nok "stale token killed the newer run"
 rx kill run >/dev/null 2>&1
 wait $p2; eq "plain rx kill stops the newest run (its client sees 143)" 143 $?
+out=$(rx wait nope 2>&1)
+has "unknown job hints at per-worktree names" "rx ps -a lists all" "$out"
+out=$(rx logs nope 2>&1)
+has "rx logs on an unknown job hints too" "jobs are per worktree" "$out"

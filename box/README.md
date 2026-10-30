@@ -19,11 +19,12 @@ Box layout, all on one XFS data filesystem so reflinks work between them:
 | Path | Contents |
 | --- | --- |
 | `/data` | data disk mount (fstab by UUID, `xfs defaults,nofail 0 2`) |
-| `/data/rx` | rx root; `~dev/rx` is a symlink to it. `w/` worktree mirrors, `snap/<wtid>-<name>` per-name job snapshots, `m/` manifests, `jobs/` job state and logs |
+| `/data/rx` | rx root; `~dev/rx` is a symlink to it. `w/` worktree mirrors, `snap/<wtid>-<name>` per-name job snapshots, `m/` manifests, `jobs/` job state and logs, `scratch/` agents' own scratch data (rx never cleans it) |
 | `/data/mbx` | mbx `cache_dir` (store and managed targets) |
-| `/data/docker` | Docker `data-root` (`/etc/docker/daemon.json`) |
+| `/data/docker` | Docker `data-root` (`/etc/docker/daemon.json`): containers, volumes, build cache |
+| `/data/containerd` | containerd `root` (`/etc/containerd/config.toml`): images, which Docker 29 stores in containerd |
 
-Submit snapshots are reflink copies, so `du` over `~/rx/snap` overstates real usage; use `df -h /data` (or `rx status`) for actual disk use.
+The box home and `/tmp` are on the 100 GB boot disk; `rx status` reports both disks and warns above 85%. Submit snapshots are reflink copies, so `du` over `~/rx/snap` overstates real usage; use `df -h /data` (or `rx status`) for actual disk use.
 
 `setup.sh` runs as root on Ubuntu 24.04 and is idempotent:
 

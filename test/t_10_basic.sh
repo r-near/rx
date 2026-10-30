@@ -64,6 +64,8 @@ rx sh -- 'exit 7' >/dev/null 2>&1
 eq "rx sh -- exits with the command's code" 7 $?
 out=$(cd / && rx sh -- 'echo ok' 2>/dev/null); rc=$?
 eq "rx sh -- works outside a git worktree" "ok 0" "$out $rc"
+out=$(rx sh -- printf '%s|' 'a b' "it's" 2>/dev/null)
+eq "rx sh -- runs several args as an argv" "a b|it's|" "$out"
 out=$(rx ps -a)
 has "ps -a lists jobs across worktrees" "/run" "$out"
 has "ps -a counts running rx jobs" "rx jobs running on the box" "$out"

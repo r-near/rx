@@ -5,5 +5,5 @@
 - rx jobs take no local build locks and no parallelism caps (`-j`, TLC `-workers 2`, `--test-threads`); those rules are for the Mac. Use the whole box: TLC `-workers auto`, cargo defaults, and as many jobs at once as you need. Never hold a local lock while waiting on an rx job.
 - Keep job output on stdout (`| tee`, not `>file`). Start piped commands with `set -o pipefail;`. Chain setup steps with `&&`. `.git` isn't on the box: use `patch -p1`, not `git apply`.
 - If a run was cut off by a timeout, it is still running: use `rx ps` and `rx wait run`. Don't restart it.
-- Linux artifacts stay on the box. Use `rx pull <path> [name]` only for data. Never put secrets in commands or in un-ignored files.
+- Linux artifacts stay on the box. Use `rx pull <path> [name]` only for data. Never put secrets in commands or in un-ignored files. Put big scratch (clones, downloads) under `~/rx/scratch/<name>`, not the box `$HOME` or `/tmp`.
 - Before finishing, `rx kill` jobs you no longer need and report any still running (`rx ps`).

@@ -162,6 +162,15 @@ if [ $MINIMAL = 0 ]; then
   fi
   apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   usermod -aG docker "$USER_NAME"
+  if systemd_up && ! grep -qs '^root = ' /etc/containerd/config.toml; then # Docker 29 keeps images in containerd, not data-root
+    if [ -n "$(docker ps -q 2>/dev/null)" ]; then echo "setup.sh: containers running; rerun when idle to move containerd to $DATA" >&2
+    else
+      systemctl stop docker docker.socket containerd
+      [ ! -d /var/lib/containerd ] || [ -e "$DATA/containerd" ] || mv /var/lib/containerd "$DATA/containerd"
+      { echo "root = \"$DATA/containerd\""; cat /etc/containerd/config.toml 2>/dev/null; } >/etc/containerd/config.toml.rx &&
+        mv /etc/containerd/config.toml.rx /etc/containerd/config.toml
+    fi
+  fi
   systemctl enable containerd docker >/dev/null 2>&1 || true
   systemd_up && { systemctl start containerd docker || echo "setup.sh: warning: docker did not start" >&2; }
 

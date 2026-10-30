@@ -62,6 +62,7 @@ running_state true && ok "container running after rx up" || nok "container not r
 out=$(rx status 2>&1)
 has "status shows instance state" "instance rx-test-box: RUNNING" "$out"
 has "status shows data disk usage" "data disk /data:" "$out"
+has "status shows boot disk usage" "boot disk /:" "$out"
 rx submit blocker -- 'sleep 30' >/dev/null 2>&1
 out=$(rx stop 2>&1); rc=$?
 eq "rx stop refuses while jobs run" 2 $rc

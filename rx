@@ -66,11 +66,14 @@ b_rm() { # dest: delete NUL-separated relative paths from stdin, then their empt
     case $p in */*) (cd "$1" && rmdir -p --ignore-fail-on-non-empty -- "${p%/*}" 2>/dev/null) ;; esac
   done
 }
-b_disk() { # data disk usage; warns above 85%
-  local pct
-  df -P -h "$B/" | awk 'NR==2 {print "data disk " $6 ": " $5 " used (" $3 " of " $2 ", " $4 " free)"}'
-  pct=$(df -P "$B/" | awk 'NR==2 {print $5+0}')
-  [ "$pct" -le 85 ] || echo "rx: warning: the box data disk is $pct% full (rx status; rx grow <size>)" >&2
+b_disk() { # data and boot disk usage; warns above 85%
+  local m pct n=data h='rx grow <size>'
+  for m in "$B/" /; do
+    df -P -h "$m" | awk -v n=$n 'NR==2 {print n " disk " $6 ": " $5 " used (" $3 " of " $2 ", " $4 " free)"}'
+    pct=$(df -P "$m" | awk 'NR==2 {print $5+0}')
+    [ "$pct" -le 85 ] || echo "rx: warning: the box $n disk is $pct% full (rx status; $h)" >&2
+    n=boot h='move scratch to ~/rx/scratch'
+  done
 }
 b_slices() {
   local d=$HOME/.config/systemd/user
@@ -161,7 +164,7 @@ b_inst() { # wtid name token|-: the job instance dir (by token, or the newest)
 }
 b_follow() { # wtid name token|-
   local L=$B/jobs/$1/$2 J unit=rx-$1-$2 w s
-  J=$(b_inst "$@") || { [ "$3" = - ] && echo "rx: no such job: $2" >&2 || echo "rx: $2 did not start" >&2; exit 2; }
+  J=$(b_inst "$@") || { [ "$3" = - ] && echo "rx: no such job in this worktree: $2 (jobs are per worktree; rx ps -a lists all)" >&2 || echo "rx: $2 did not start" >&2; exit 2; }
   (while [ ! -e "$J/exit" ] && b_busy "$unit" && [ "$(readlink -e "$L")" = "$J" ]; do sleep 0.5; done) &
   w=$!
   tail -s 0.5 -n +1 -f --pid=$w "$J/log" 2>/dev/null | b_rewrite "$J"
@@ -204,10 +207,10 @@ b_main() {
     ps) b_ps "$1" ;;
     logs)
       J=$B/jobs/$1/$2
-      [ -d "$J" ] || die "no such job: $2"
+      [ -d "$J" ] || die "no such job in this worktree: $2 (jobs are per worktree; rx ps -a lists all)"
       tail -n "$3" "$J/log" | b_rewrite "$J" ;;
     kill) # wtid name token|-: with a token, only that instance, and only while it is the current one
-      J=$(b_inst "$@") || die "no such job: $2"
+      J=$(b_inst "$@") || die "no such job in this worktree: $2 (jobs are per worktree; rx ps -a lists all)"
       if [ "$(readlink -e "$B/jobs/$1/$2")" != "$J" ]; then
         echo "rx: $2 is not running (a newer $2 replaced it)" >&2
       elif [ ! -e "$J/exit" ] && b_busy "rx-$1-$2"; then
@@ -449,7 +452,8 @@ case $cmd in
     fi
     connect
     [ $# -gt 0 ] || exec "${SSH[@]}" -t "$HOST" "$pre; exec bash -l"
-    c=\'$(printf '%s' "$*" | sed "s/'/'\\\\''/g")\' # no sync, no job, no lock: for quick looks
+    s=$1; [ $# -eq 1 ] || s=$(printf '%q ' "$@") # several args: an argv, like rx run
+    c=\'$(printf '%s' "$s" | sed "s/'/'\\\\''/g")\' # no sync, no job, no lock: for quick looks
     exec "${SSH[@]}" "$HOST" "$pre; exec bash -lc $c" ;;
   up)
     if [ -n "${RX_GCE_INSTANCE:-}" ]; then probe || wake; else connect; fi
