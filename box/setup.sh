@@ -166,9 +166,12 @@ if [ $MINIMAL = 0 ]; then
     if [ -n "$(docker ps -q 2>/dev/null)" ]; then echo "setup.sh: containers running; rerun when idle to move containerd to $DATA" >&2
     else
       systemctl stop docker docker.socket containerd
-      [ ! -d /var/lib/containerd ] || [ -e "$DATA/containerd" ] || mv /var/lib/containerd "$DATA/containerd"
+      if [ -d /var/lib/containerd ] && [ ! -e "$DATA/containerd" ]; then # copy, then rename: an interrupted run leaves only .tmp
+        rm -rf "$DATA/containerd.tmp"
+        cp -a /var/lib/containerd "$DATA/containerd.tmp" && mv -T "$DATA/containerd.tmp" "$DATA/containerd" || exit 1
+      fi
       { echo "root = \"$DATA/containerd\""; cat /etc/containerd/config.toml 2>/dev/null; } >/etc/containerd/config.toml.rx &&
-        mv /etc/containerd/config.toml.rx /etc/containerd/config.toml
+        mv /etc/containerd/config.toml.rx /etc/containerd/config.toml && rm -rf /var/lib/containerd
     fi
   fi
   systemctl enable containerd docker >/dev/null 2>&1 || true
