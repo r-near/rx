@@ -57,6 +57,11 @@ out=$(cd sub && echo 'pwd; ls' | rx sh 2>/dev/null)
 has "rx sh opens in the worktree's box dir" "/rx/w/basic-" "$out"
 has "rx sh opens in the matching subdirectory" "sub
 deeper" "$(echo "$out" | sed 's|.*/||')"
+out=$(cd sub && rx sh -- 'pwd; echo "it'\''s $((1 + 1))"' 2>/dev/null)
+has "rx sh -- runs one command in the matching box dir" "/rx/w/basic-" "$out"
+has "rx sh -- passes a shell string through" "it's 2" "$out"
+rx sh -- 'exit 7' >/dev/null 2>&1
+eq "rx sh -- exits with the command's code" 7 $?
 out=$(rx ps -a)
 has "ps -a lists jobs across worktrees" "/run" "$out"
 has "ps -a counts running rx jobs" "rx jobs running on the box" "$out"

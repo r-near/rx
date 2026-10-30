@@ -8,6 +8,7 @@ rx submit fuzz -- cargo fuzz run parser  # long job on a frozen snapshot; return
 rx wait fuzz; rx logs fuzz 50; rx ps; rx kill fuzz
 rx pull fuzz/artifacts fuzz              # data from the box into ./.rx-out/
 rx sh                                    # shell in this worktree's box dir
+rx sh -- uptime                          # quick command there: no sync, no job, no queue
 rx up | rx status | rx stop | rx grow 1000GB
 ```
 

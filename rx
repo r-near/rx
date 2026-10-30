@@ -8,7 +8,7 @@
 #   rx ps [-a]                            jobs of this worktree (-a: all worktrees)
 #   rx kill <name>                        stop a job and everything it started
 #   rx pull <path> [name]                 copy box data into ./.rx-out/ (from a job's snapshot with name)
-#   rx sh                                 interactive shell in this worktree's box dir
+#   rx sh [-- <cmd>]                      shell (or one quick command, no sync) in this worktree's box dir
 #   rx up | rx status | rx stop [-f]      box lifecycle (gcloud)
 #   rx grow <size>                        resize the data disk (e.g. 1000GB) and grow its filesystem
 #
@@ -438,9 +438,13 @@ case $cmd in
     "$RSYNC" -a -s --no-owner --no-group -e "$(rsh)" "$HOST:$src/${rel:+$rel/}$1" .rx-out/ ||
       fail "pull failed" ;;
   sh)
+    [ "${1:-}" = -- ] && shift
     repo_ctx; connect
     q=\'$(printf '%s' "rx/w/$wtid/$rel" | sed "s/'/'\\\\''/g")\'
-    exec "${SSH[@]}" -t "$HOST" "touch .rx/last-activity 2>/dev/null; cd $q 2>/dev/null || cd rx/w/$wtid 2>/dev/null; exec bash -l" ;;
+    pre="touch .rx/last-activity 2>/dev/null; cd $q 2>/dev/null || cd rx/w/$wtid 2>/dev/null"
+    [ $# -gt 0 ] || exec "${SSH[@]}" -t "$HOST" "$pre; exec bash -l"
+    c=\'$(printf '%s' "$*" | sed "s/'/'\\\\''/g")\' # no sync, no job, no lock: for quick looks
+    exec "${SSH[@]}" "$HOST" "$pre; exec bash -lc $c" ;;
   up)
     if [ -n "${RX_GCE_INSTANCE:-}" ]; then probe || wake; else connect; fi
     rcall status ;;
