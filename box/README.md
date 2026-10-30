@@ -153,3 +153,11 @@ RX_GCE_DATA_DISK=buildbox-data
 ```
 
 The box has no GCP credentials by design. Wake (`gcloud compute instances start`), `rx stop` and `rx grow` (`gcloud compute disks resize`) run from the Mac. A Spot stockout on wake exits 75 with `rx: box is stocked out in <zone>; try again later`. The matcher covers the real *create* stockout text (`ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS`, `reason: resource_availability`, `state:STOCKOUT`; kept as a test fixture). The exact wording `start` uses is unverified.
+
+If a stockout lasts, switch the stopped box to a smaller type in the same zone. It keeps its disks and caches, and the type must support hyperdisk (C3D, C3, C4):
+
+```
+gcloud compute instances set-machine-type buildbox --zone your-zone --machine-type c3d-standard-30
+```
+
+Switch back once capacity returns.
