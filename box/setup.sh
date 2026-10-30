@@ -58,7 +58,7 @@ chmod 440 "/etc/sudoers.d/90-rx-$USER_NAME"
 mkdir -p /etc/ssh/sshd_config.d
 printf 'MaxSessions 200\nMaxStartups 100:30:200\nClientAliveInterval 30\n' >/etc/ssh/sshd_config.d/90-rx.conf
 printf 'fs.inotify.max_user_instances = 8192\nfs.inotify.max_user_watches = 1048576\n' >/etc/sysctl.d/90-rx.conf
-systemd_up && sysctl -q --system >/dev/null 2>&1 || true
+systemd_up && sysctl -q -p /etc/sysctl.d/90-rx.conf >/dev/null 2>&1 || true # --system would re-apply GCE's ip_forward=0 under Docker
 
 mkdir -p "$DATA"
 if [ -n "$DISK$LOOP" ]; then
