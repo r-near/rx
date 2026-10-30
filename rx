@@ -247,14 +247,14 @@ SSH=(ssh -o ControlMaster=auto -o "ControlPath=${RX_CONTROL_DIR:-$HOME/.ssh}/rx-
 ST='' TOKEN=''
 [ -d "${RX_CONTROL_DIR:-$HOME/.ssh}" ] || mkdir -m 700 "${RX_CONTROL_DIR:-$HOME/.ssh}"
 
-find_rsync() { # upstream rsync >= 3.1 (macOS /usr/bin/rsync is openrsync)
+find_rsync() { # upstream rsync >= 3.1.3, for --modify-window=-1 (macOS /usr/bin/rsync is openrsync)
   local r v
   for r in ${RX_RSYNC:-/opt/homebrew/bin/rsync /usr/local/bin/rsync $(command -v rsync)}; do
     [ -x "$r" ] || continue
-    v=$("$r" --version 2>/dev/null | sed -n '1s/^rsync  *version  *v*\([0-9]*\.[0-9]*\).*/\1/p')
-    case $v in 3.[1-9]* | [4-9].*) RSYNC=$r; return ;; esac
+    v=$("$r" --version 2>/dev/null | sed -n '1s/^rsync  *version  *v*\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')
+    case $v in 3.1.[3-9]* | 3.[2-9]* | [4-9].*) RSYNC=$r; return ;; esac
   done
-  die "need upstream rsync >= 3.1 (macOS ships openrsync): brew install rsync"
+  die "need upstream rsync >= 3.1.3 (macOS ships openrsync): brew install rsync"
 }
 rsh() { # ssh command as one string for rsync -e (rsync splits on spaces, honors single quotes)
   local a s=''
@@ -300,12 +300,12 @@ probe() { # does the box answer within a few seconds? kills a hung control maste
   "${SSH[@]}" -o ConnectTimeout=5 -o BatchMode=yes "$HOST" true </dev/null >/dev/null 2>&1 &
   local p=$! n=0
   while kill -0 $p 2>/dev/null; do
-    if [ $n -ge 40 ]; then
+    if [ $n -ge 400 ]; then
       kill $p 2>/dev/null; wait $p 2>/dev/null
       "${SSH[@]}" -O exit "$HOST" >/dev/null 2>&1
       return 1
     fi
-    sleep 0.2; n=$((n + 1))
+    sleep 0.02; n=$((n + 1))
   done
   wait $p
 }
@@ -370,7 +370,7 @@ sync_start() { # mode name: one rsync whose box side locks, syncs and starts the
   [ "$1" = submit ] && dest=rx/snap/$wtid-$2
   find_rsync
   rcall stage || exit
-  "$RSYNC" -a --no-owner --no-group --files-from="$ST/manifest" --from0 --delete-missing-args \
+  "$RSYNC" -a --no-owner --no-group --modify-window=-1 --files-from="$ST/manifest" --from0 --delete-missing-args \
     -e "$(rsh)" --rsync-path=".rx/bin/rx-$HASH __remote .rx/stage/$TOKEN recv" "$root/" "$HOST:$dest/"
   rc=$?
   case $rc in 0 | 24) ;; 2) exit 2 ;; *) fail "sync or start failed (rsync exit $rc)" ;; esac
@@ -380,14 +380,16 @@ attach() { # name own|wait: stream until the job ends. Ctrl-C stops an owned run
   local tok=-
   stage_dir
   [ "$2" = own ] && tok=$TOKEN
-  rcall -x follow "$wtid" "$name" "$tok" &
-  fp=$!
+  fp=''
   if [ "$2" = own ]; then
     trap 'kill $fp 2>/dev/null; rcall kill "$wtid" "$name" "$TOKEN"; exit 130' INT
   else
     trap 'kill $fp 2>/dev/null; echo "$hint" >&2; exit 130' INT
   fi
   trap 'kill $fp 2>/dev/null; echo "$hint" >&2; exit 143' TERM HUP
+  # An async command ignores SIGINT, so a Ctrl-C to the process group reaches only the traps above.
+  rcall -x follow "$wtid" "$name" "$tok" &
+  fp=$!
   wait $fp
   rc=$?
   trap - INT TERM HUP

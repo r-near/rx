@@ -94,3 +94,10 @@ hasnt "no warning for ignored files" ignored.pem "$err"
 mkrepo subdep && git commit -qm init && cd "$W"
 mkrepo withsub && git -c protocol.file.allow=always submodule add -q "$W/repos/subdep" sub
 eq "submodule files are synced" hello "$(rx run -- 'cat sub/a.txt')"
+
+# A same-size rewrite within the same second as the last sync still reaches the box (rsync --modify-window=-1).
+mkrepo mtime && echo v1 >f && git add f
+python3 -c 'import os; os.utime("f", ns=(1700000000_100000000, 1700000000_100000000))'
+rx run -- true >/dev/null 2>&1
+echo v2 >f && python3 -c 'import os; os.utime("f", ns=(1700000000_600000000, 1700000000_600000000))'
+eq "same-size, same-second rewrite is synced" v2 "$(rx run -- 'cat f' 2>/dev/null)"
