@@ -1,6 +1,6 @@
 # Build box
 
-STATUS: ready (setup.sh: full mode verified on a fresh Ubuntu 24.04 systemd container (aarch64), re-run idempotently; minimal mode is the test box for the test suite. Tailscale SSH session counting verified on the real VM, see below)
+This sets up the box half of rx: one Ubuntu 24.04 VM on GCE, reachable only over Tailscale SSH. Tested on a fresh Ubuntu 24.04 systemd container (aarch64) and on the real VM; setup.sh is idempotent.
 
 ## Interface (stable)
 
