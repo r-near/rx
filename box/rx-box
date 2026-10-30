@@ -25,9 +25,10 @@ age_min() { echo $(((now - $(stat -c %Y "$1" 2>/dev/null || echo 0)) / 60)); }
 # - OpenSSH: one "sshd: <user>@<tty|notty>" (or "sshd-session: ...") process per connection; an idle
 #   ControlMaster connection counts until ControlPersist expires.
 # - Tailscale SSH never touches sshd. Observed on the real box: tailscaled (parent PID 1) ->
-#   "tailscaled be-child ssh-monitor --local-user=dev ..." (one per session) -> "be-child ssh
-#   --login-shell=..." -> the command. Counting the daemon's direct children (one ssh-monitor per
-#   session) is exact; port-22-, who- or loginctl-based counts miss Tailscale SSH entirely.
+#   "tailscaled be-child ssh-monitor --local-user=dev ..." (one per connection; an OpenSSH
+#   ControlMaster multiplexes several sessions under it) -> "be-child ssh --login-shell=..." -> the
+#   command. Counting the daemon's direct children counts connections (one ssh-monitor each);
+#   port-22-, who- or loginctl-based counts miss Tailscale SSH entirely.
 ssh_sessions() { # sets SESSIONS (count) and SESSION_LINES (what was counted)
   local line ts
   SESSIONS=0 SESSION_LINES=''
