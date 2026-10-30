@@ -40,6 +40,20 @@ eq "wait on a finished job replays it with its code" "5" "$rc"
 rx submit slow -- 'exit 0' >/dev/null 2>&1 && ok "finished name can be reused" || nok "finished name not reusable"
 rx wait slow >/dev/null 2>&1; eq "reused name's new exit code" 0 $?
 
+# A reused name keeps its snapshot, so build output stays warm, and the sync still applies
+# edits and deletions; a new name starts from a fresh copy.
+echo keep >keep.txt && echo gone >gone.txt && git add keep.txt gone.txt && echo scratch >scratch.txt
+rx submit warm -- 'echo built >out.txt' >/dev/null 2>&1; rx wait warm >/dev/null 2>&1
+echo keep2 >keep.txt && git rm -qf gone.txt && rm scratch.txt
+probe='cat out.txt keep.txt; for f in gone.txt scratch.txt; do [ -e $f ] && echo HAS-$f; done; true'
+rx submit warm -- "$probe" >/dev/null 2>&1; out=$(rx wait warm 2>&1)
+has "reused name keeps its build output" "built" "$out"
+has "reused name gets new edits" "keep2" "$out"
+hasnt "reused name drops a deleted tracked file" "HAS-gone.txt" "$out"
+hasnt "reused name drops a deleted untracked file" "HAS-scratch.txt" "$out"
+rx submit fresh -- "$probe" >/dev/null 2>&1; out=$(rx wait fresh 2>&1)
+hasnt "a new name doesn't see another name's output" "built" "$out"
+
 rx run -- 'mkdir -p out && echo data >out/result.txt' >/dev/null
 rx pull out/result.txt >/dev/null && eq "pull copies into .rx-out" data "$(cat .rx-out/result.txt)"
 out=$(git status --porcelain --untracked-files=all | grep rx-out); eq ".rx-out is ignored by git (and not synced)" "" "$out"

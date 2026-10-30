@@ -2,11 +2,11 @@
 # rx: run heavy commands for the current git worktree on a remote Linux build box.
 #
 #   rx run [--] <cmd...>                  sync, run in this worktree's box dir, stream, exit with its code
-#   rx submit [--mem 64G] <name> [--] <cmd...>  sync a private snapshot, start detached, return
+#   rx submit [--mem 64G] <name> [--] <cmd...>  sync the name's snapshot (kept between runs), start detached
 #   rx wait <name>                        reattach: stream the log, exit with the job's code
 #   rx logs <name> [n]                    last n lines of a job's log (default 200)
 #   rx ps [-a]                            jobs of this worktree (-a: all worktrees)
-#   rx kill <name>                        stop a job and everything it started
+#   rx kill <name>                        stop a job and its processes (not Docker containers)
 #   rx pull <path> [name]                 copy box data into ./.rx-out/ (from a job's snapshot with name)
 #   rx sh [-- <cmd>]                      shell (or one quick command, no sync) in this worktree's box dir
 #   rx up | rx status | rx stop [-f]      box lifecycle (gcloud)
@@ -96,13 +96,15 @@ b_recv() { # rsync --server args...: lock, wait or refuse, prepare dest, sync, s
   done
   if [ "$mode" = submit ]; then
     dest=$B/snap/$wtid-$name mf=$B/m/$wtid-$name
-    rm -rf "$dest" "$mf"
-    mkdir -p "$B/w/$wtid"
-    exec 7>>"$HOME/.rx/lock/$wtid-run"
-    flock 7
-    cp -a --reflink=auto "$B/w/$wtid" "$dest" && { [ ! -f "$B/m/$wtid" ] || cp "$B/m/$wtid" "$mf"; } || exit 1
-    flock -u 7
-    find "$dest" -maxdepth 4 -name target -type l -delete # mbx target links: the job gets its own
+    if [ ! -d "$dest" ] || [ ! -f "$mf" ]; then # a reused name keeps its snapshot (warm); the sync updates it
+      rm -rf "$dest" "$mf"
+      mkdir -p "$B/w/$wtid"
+      exec 7>>"$HOME/.rx/lock/$wtid-run"
+      flock 7
+      cp -a --reflink=auto "$B/w/$wtid" "$dest" && { [ ! -f "$B/m/$wtid" ] || cp "$B/m/$wtid" "$mf"; } || exit 1
+      flock -u 7
+      find "$dest" -maxdepth 4 -name target -type l -delete # mbx target links: the job gets its own
+    fi
   else
     dest=$B/w/$wtid mf=$B/m/$wtid
   fi
