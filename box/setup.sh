@@ -132,6 +132,11 @@ if [ $MINIMAL = 0 ]; then
   fi
   as_user 'for t in cargo-nextest cargo-fuzz cargo-llvm-cov; do
     [ -x ~/.cargo/bin/$t ] || cargo binstall -y --locked "$t" || exit 1; done'
+  # NEAR: near-workspaces shells out to cargo-near (pinned to near-sdk-rs CI's version) and needs a sandbox
+  # binary outside mbx's read-only shared OUT_DIR, so jobs set NEAR_SANDBOX_BIN_PATH to this one
+  as_user 'set -o pipefail; [ -x ~/.cargo/bin/cargo-near ] || curl --proto =https --tlsv1.2 -fsSL https://github.com/near/cargo-near/releases/download/cargo-near-v0.21.0/cargo-near-installer.sh | CARGO_NEAR_NO_MODIFY_PATH=1 sh'
+  as_user "set -o pipefail; d=\$HOME/.near/near-sandbox-2.14.0; [ -x \$d/Linux-$ARCH/near-sandbox ] || { mkdir -p \$d &&
+    curl -fsSL https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-$ARCH/2.14.0/near-sandbox.tar.gz | tar -xz -C \$d; }"
 
   log "java + TLA+"
   install -d -m 0755 /etc/apt/keyrings
