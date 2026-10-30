@@ -5,7 +5,7 @@
 #   rx-box cleanup [--dry-run]             (as the rx user, daily) prune old worktree dirs and jobs
 # Powers off once there have been no active rx units and no ssh sessions (OpenSSH or Tailscale SSH)
 # for the whole limit, and ~/.rx/last-activity is at least the limit old: about 30 minutes after the
-# last rx call or session ends, give or take one 5-minute tick.
+# last ssh connection closes (about 45 after the last rx call, with ControlPersist), give or take a tick.
 # Tunables (env): RX_IDLE_MIN=30 RX_IDLE_STATE=/run/rx-idle-since RX_KEEP_DAYS=14 RX_JOB_DAYS=3
 set -u
 cmd=${1:-} dry='' user=dev

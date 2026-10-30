@@ -440,7 +440,7 @@ case $cmd in
   sh)
     [ "${1:-}" = -- ] && shift
     pre="touch .rx/last-activity 2>/dev/null"
-    if git rev-parse --show-toplevel >/dev/null 2>&1; then # outside a worktree, stay in the box home
+    if git rev-parse --show-toplevel >/dev/null 2>&1; then # else stay in the box home
       repo_ctx
       q=\'$(printf '%s' "rx/w/$wtid/$rel" | sed "s/'/'\\\\''/g")\'
       pre="$pre; cd $q 2>/dev/null || cd rx/w/$wtid 2>/dev/null"

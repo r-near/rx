@@ -60,7 +60,7 @@ Config is sourced from `~/.config/rx/config` (or `$RX_CONFIG`): `RX_HOST`, `RX_G
 - **Signals.** Ctrl-C (INT) on `rx run` stops the job. TERM and HUP (an agent's shell timeout) only detach and print `rx wait run`. `rx wait` never kills.
 - **Lost jobs.** Each job records the boot ID plus the systemd user manager's invocation ID. If the box restarted (Spot preemption stops the VM; the disk survives), `rx ps` and `rx wait` say `lost (box restarted)` instead of hanging or inventing an exit code.
 - **Self-install.** Every call pipes a tar of the client script and the job spec over ssh. A small prelude installs it as `~/.rx/bin/rx-<hash>` when it changed, so there is no quoting across ssh and nothing to deploy.
-- **Wake and idle.** If ssh fails and GCE settings exist, rx runs `gcloud compute instances start` and waits for ssh (about 3 minutes max). The box powers itself off about 30 minutes after the last rx call or ssh session ends (see `box/README.md`).
+- **Wake and idle.** If ssh fails and GCE settings exist, rx runs `gcloud compute instances start` and waits for ssh (about 3 minutes max). The box powers itself off about 45 minutes after the last rx call (the 15-minute ControlPersist, then 30 idle minutes), or 30 minutes after a plain ssh session ends (see `box/README.md`).
 - **Connection.** ssh with ControlMaster/ControlPersist (sockets in `~/.ssh/rx-%C`, or `$RX_CONTROL_DIR`). A hung master, e.g. after a preemption, is detected and replaced.
 
 ## Limits
