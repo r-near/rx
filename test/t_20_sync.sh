@@ -89,3 +89,8 @@ eq "at most 5 per-file warnings" 5 "$(grep -c 'rx: warning: syncing untracked' "
 has "then a summary line" "more untracked secret-looking files not listed" "$err"
 hasnt "no warning for tracked files" tracked.key "$err"
 hasnt "no warning for ignored files" ignored.pem "$err"
+
+# Files inside checked-out submodules are synced.
+mkrepo subdep && git commit -qm init && cd "$W"
+mkrepo withsub && git -c protocol.file.allow=always submodule add -q "$W/repos/subdep" sub
+eq "submodule files are synced" hello "$(rx run -- 'cat sub/a.txt')"

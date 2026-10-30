@@ -346,7 +346,7 @@ prepare_job() { # mode name cmd...: write the job spec into the stage dir
     eval "isset=\${$v+x}"
     [ -n "$isset" ] && printf '%s=%s\0' "$v" "${!v}" >>"$ST/env"
   done
-  git -C "$root" ls-files -z --cached >"$ST/manifest"
+  git -C "$root" ls-files -z --cached --recurse-submodules >"$ST/manifest"
   git -C "$root" ls-files -z --deleted >"$ST/missing"
   git -C "$root" ls-files -z --others --exclude-standard | # untracked symlinks (mbx target) stay local
     while IFS= read -r -d '' f; do
@@ -432,7 +432,7 @@ case $cmd in
     [ $# -ge 1 ] || die "usage: rx pull <path> [name]"
     repo_ctx; find_rsync
     src=rx/w/$wtid
-    [ -n "${2:-}" ] && src=rx/snap/$wtid-$2
+    [ -n "${2:-}" ] && [ "$2" != run ] && src=rx/snap/$wtid-$2
     mkdir -p .rx-out && echo '*' >.rx-out/.gitignore # keeps pulled data out of the next sync
     connect
     "$RSYNC" -a -s --no-owner --no-group -e "$(rsh)" "$HOST:$src/${rel:+$rel/}$1" .rx-out/ ||

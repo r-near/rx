@@ -45,6 +45,8 @@ rx pull out/result.txt >/dev/null && eq "pull copies into .rx-out" data "$(cat .
 out=$(git status --porcelain --untracked-files=all | grep rx-out); eq ".rx-out is ignored by git (and not synced)" "" "$out"
 rx submit snapjob -- 'echo snapdata >snap.txt' >/dev/null 2>&1; rx wait snapjob >/dev/null 2>&1
 rx pull snap.txt snapjob >/dev/null && eq "pull from a job's snapshot" snapdata "$(cat .rx-out/snap.txt)"
+rx run -- 'mkdir -p out && echo hi >out/x' >/dev/null
+rx pull out/x run >/dev/null; eq "pull from run reads the worktree dir" hi "$(cat .rx-out/x 2>/dev/null)"
 
 # kill: the whole unit goes, state is "killed", wait reports it
 rx submit victim -- 'sleep 300' >/dev/null 2>&1
