@@ -24,6 +24,8 @@ Box layout, all on one XFS data filesystem so reflinks work between them:
 | `/data/docker` | Docker `data-root` (`/etc/docker/daemon.json`): containers, volumes, build cache |
 | `/data/containerd` | containerd `root` (`/etc/containerd/config.toml`): images, which Docker 29 stores in containerd |
 
+Containers run in `containers.slice` (`cgroup-parent` in `daemon.json`) with `MemoryMax=70%` of RAM, so a runaway container is OOM-killed inside that slice instead of taking rx jobs with it. Containers still run outside rx's CPU weights.
+
 The box home and `/tmp` are on the 100 GB boot disk; `rx status` reports both disks and warns above 85%. Submit snapshots are reflink copies, so `du` over `~/rx/snap` overstates real usage; use `df -h /data` (or `rx status`) for actual disk use.
 
 `setup.sh` runs as root on Ubuntu 24.04 and is idempotent:

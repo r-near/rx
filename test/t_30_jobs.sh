@@ -61,6 +61,7 @@ rx submit snapjob -- 'echo snapdata >snap.txt' >/dev/null 2>&1; rx wait snapjob 
 rx pull snap.txt snapjob >/dev/null && eq "pull from a job's snapshot" snapdata "$(cat .rx-out/snap.txt)"
 rx run -- 'mkdir -p out && echo hi >out/x' >/dev/null
 rx pull out/x run >/dev/null; eq "pull from run reads the worktree dir" hi "$(cat .rx-out/x 2>/dev/null)"
+out=$(rx pull no/such/file 2>&1); has "a failed pull names the box path it tried" "pull failed: ~/rx/w/" "$out"
 
 # kill: the whole unit goes, state is "killed", wait reports it
 rx submit victim -- 'sleep 300' >/dev/null 2>&1

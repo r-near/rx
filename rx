@@ -443,7 +443,7 @@ case $cmd in
     mkdir -p .rx-out && echo '*' >.rx-out/.gitignore # keeps pulled data out of the next sync
     connect
     "$RSYNC" -a -s --no-owner --no-group -e "$(rsh)" "$HOST:$src/${rel:+$rel/}$1" .rx-out/ ||
-      fail "pull failed" ;;
+      fail "pull failed: ~/$src/${rel:+$rel/}$1 on the box (paths are relative to this dir's box copy)" ;;
   sh)
     [ "${1:-}" = -- ] && shift
     pre="touch .rx/last-activity 2>/dev/null"

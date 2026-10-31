@@ -161,9 +161,13 @@ if [ $MINIMAL = 0 ]; then
       >/etc/apt/sources.list.d/docker.list
     apt_updated=0
   fi
-  if [ ! -f /etc/docker/daemon.json ]; then # images and build cache on the data disk
-    mkdir -p /etc/docker "$DATA/docker"
-    printf '{ "data-root": "%s/docker" }\n' "$DATA" >/etc/docker/daemon.json
+  # Data on the data disk; containers in a memory-capped slice, so a runaway one is OOM-killed there, not rx jobs
+  mkdir -p /etc/docker "$DATA/docker"
+  printf '[Slice]\nMemoryMax=70%%\n' >/etc/systemd/system/containers.slice
+  dj=$(printf '{ "data-root": "%s/docker", "cgroup-parent": "containers.slice" }' "$DATA")
+  if [ "$(cat /etc/docker/daemon.json 2>/dev/null)" != "$dj" ]; then
+    if [ -n "$(docker ps -q 2>/dev/null)" ]; then echo "setup.sh: containers running; rerun when idle to update daemon.json" >&2
+    else echo "$dj" >/etc/docker/daemon.json; systemd_up && systemctl daemon-reload && { ! systemctl -q is-active docker || systemctl restart docker; }; fi
   fi
   apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   usermod -aG docker "$USER_NAME"
