@@ -436,7 +436,9 @@ case $cmd in
     [ $# = 1 ] || die "usage: rx kill <name>"
     repo_ctx; connect; rcall kill "$wtid" "$1" - ;;
   pull)
-    [ $# -ge 1 ] || die "usage: rx pull <path> [name]"
+    u="usage: rx pull <path> [name] (files land in ./.rx-out/)"
+    case ${1:--} in -*) die "$u" ;; esac
+    case ${2:-run} in -* | *[!A-Za-z0-9_-]*) die "$u" ;; esac
     repo_ctx; find_rsync
     src=rx/w/$wtid
     [ -n "${2:-}" ] && [ "$2" != run ] && src=rx/snap/$wtid-$2

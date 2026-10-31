@@ -19,7 +19,7 @@ rx run -- cargo nextest run --workspace     # foreground; exit code is the comma
 rx run -- 'cd crates/core && cargo test -- --nocapture'   # one arg = shell string
 rx submit fuzz-parser --mem 64G -- cargo fuzz run parser -- -max_total_time=3600
 rx ps            # this worktree's jobs: running, exit N, killed, lost (box restarted)
-rx wait <name>   # reattach and stream; exits with the job's code (to block, raise your shell tool's timeout to its max, e.g. 600000 ms, and run `timeout 590 rx wait <name>`; never loop or sleep on rx ps)
+rx wait <name>   # reattach and stream; exits with the job's code (to block, raise your shell tool's timeout to its max, e.g. 600000 ms, and run `timeout 570 rx wait <name>`; never loop or sleep on rx ps)
 rx logs <name> 100
 rx kill <name>
 rx pull fuzz/artifacts fuzz-parser          # data into ./.rx-out/ (from that job's snapshot)
