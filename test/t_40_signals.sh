@@ -42,6 +42,12 @@ out=$(rx wait run 2>&1); rc=$?
 eq "rx wait after TERM: real exit code" 9 $rc
 has "rx wait after TERM: replays the whole log" "begin" "$out"
 has "rx wait after TERM: gets the rest" "finish" "$out"
+rx submit ticker -- 'while :; do echo tick; sleep 0.2; done' >/dev/null 2>&1
+"${RXC[@]}" wait ticker >/dev/null 2>&1 &
+pid=$!; sleep 2; kill -TERM $pid; wait $pid
+wait_for 10 box "! pgrep -f '[f]ollow .* ticker '" && ok "TERM on rx wait: no follower left on the box" ||
+  nok "TERM on rx wait: no follower left on the box" "$(box "pgrep -af '[f]ollow .* ticker '")"
+rx kill ticker >/dev/null 2>&1
 
 # HUP (terminal or agent session closed): same as TERM
 "${RXC[@]}" run -- 'echo up; sleep 3; exit 4' >"$W/hup.out" 2>"$W/hup.err" &

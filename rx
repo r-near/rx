@@ -165,7 +165,7 @@ b_inst() { # wtid name token|-: the job instance dir (by token, or the newest)
 b_follow() { # wtid name token|-
   local L=$B/jobs/$1/$2 J unit=rx-$1-$2 w s
   J=$(b_inst "$@") || { [ "$3" = - ] && echo "rx: no such job in this worktree: $2 (jobs are per worktree; rx ps -a lists all)" >&2 || echo "rx: $2 did not start" >&2; exit 2; }
-  (while [ ! -e "$J/exit" ] && b_busy "$unit" && [ "$(readlink -e "$L")" = "$J" ]; do sleep 0.5; done) &
+  (while [ ! -e "$J/exit" ] && kill -0 $$ 2>/dev/null && b_busy "$unit" && [ "$(readlink -e "$L")" = "$J" ]; do sleep 0.5; done) &
   w=$!
   tail -s 0.5 -n +1 -f --pid=$w "$J/log" 2>/dev/null | b_rewrite "$J"
   s=$(b_status "$J" "$unit")
