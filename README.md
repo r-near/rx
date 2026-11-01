@@ -114,6 +114,7 @@ Jobs get `CARGO_TERM_COLOR=never` unless you forward your own.
 - Remote stdout and stderr arrive merged on stdout; jobs get no stdin.
 - Untracked files that aren't ignored get synced, so keep secrets gitignored. rx warns (it doesn't block) when an untracked, un-ignored file looks like one (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*credentials*`, `*.p12`). It prints at most 5 names per sync.
 - A client killed with SIGKILL can leave its local ssh follower printing until the job ends; the job itself is unaffected.
+- When a client detaches or dies, its box-side follower only notices at the job's next output line (or when the job ends), so a silent job can collect a few idle followers. They don't keep the box up.
 - The client runs on macOS (`/bin/bash` 3.2 or newer); the box setup targets Ubuntu 24.04 on GCE. Another cloud or your own server should work with no `RX_GCE_*` settings, minus wake, `rx stop` and `rx grow`. The idle timer still powers the box off, so you'd start it yourself.
 
 ## Tests
