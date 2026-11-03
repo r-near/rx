@@ -65,6 +65,8 @@ You need a GCP project with Spot quota, a Tailscale tailnet, and on the Mac `gcl
    ln -s "$PWD/skill" ~/.agents/skills/remote-exec    # Codex
    ```
 
+   If you run Claude Code with more than one config dir (`CLAUDE_CONFIG_DIR`), link the skill and add the snippet in each.
+
    Codex's workspace-write sandbox blocks network access by default, so `rx` fails until you set `sandbox_workspace_write.network_access = true` in `~/.codex/config.toml` or approve the command to run outside the sandbox.
 
 5. **Try it:** `rx run -- uname -a` from any git worktree.
