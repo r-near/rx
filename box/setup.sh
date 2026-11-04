@@ -101,7 +101,7 @@ if [ ! -x "$HOME_DIR/.local/bin/mbx" ]; then
 fi
 DATA_GIB=$(($(df -B1 --output=size "$DATA/" | tail -1) / 1073741824))
 [ -n "$BUDGET" ] || BUDGET=$((DATA_GIB / 2))GiB
-MINFREE=$((DATA_GIB / 10 > 1 ? DATA_GIB / 10 : 1))GiB
+MINFREE=$((DATA_GIB / 5 > 1 ? DATA_GIB / 5 : 1))GiB # mbx frees space below this, keeping the disk under the 85% warning
 log "mbx: cache_dir $DATA/mbx, budget $BUDGET, min free $MINFREE (data fs ${DATA_GIB}GiB)"
 as_user "m=\$HOME/.local/bin/mbx; \$m setup --yes >/dev/null && \$m settings set cache_dir $DATA/mbx &&
   \$m settings set gc.max_total_size $BUDGET && \$m settings set gc.min_free_size $MINFREE"

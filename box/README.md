@@ -36,7 +36,7 @@ sudo ./setup.sh [--user dev] [--data-disk DEV | --data-loop FILE:SIZE] [--mbx-bu
 
 - `--data-disk DEV`: format DEV as XFS with reflink if it has no filesystem, then mount it at `/data`. It never reformats a disk that already has a filesystem. On GCE use `/dev/disk/by-id/google-data` (device-name `data`).
 - `--data-loop FILE:SIZE`: the same, backed by a loopback file (tests only).
-- `--mbx-budget SIZE`: mbx `gc.max_total_size`. The default is 50% of the `/data` filesystem, recomputed on every run. `gc.min_free_size` is set to 10% of the filesystem.
+- `--mbx-budget SIZE`: mbx `gc.max_total_size`. The default is 50% of the `/data` filesystem, recomputed on every run. `gc.min_free_size` is set to 20% of the filesystem, so mbx keeps the disk below rx's 85% warning and the warning means something else is filling it.
 - `--minimal`: base packages, sshd, rsync, Rust stable and mbx only (the test container).
 
 What setup.sh owns: the `dev` user with passwordless sudo and linger, the data disk, Docker with buildx (data-root on `/data`), rustup with stable and nightly, mise with Node LTS (`mise use -g node@lts`), mbx, mold, cargo-binstall, cargo-nextest, cargo-fuzz and cargo-llvm-cov, cargo-near 0.21.0 and a near-sandbox 2.14.0 binary in `~/.near/` (for near-workspaces tests), Temurin 21 with `tla2tools.jar` (`tlc` wrapper), build deps, the utilities (jq, ripgrep, fd, fzf, bat, eza, zoxide, tmux, btop, ncdu), unattended security upgrades without automatic reboots, the `tailscale` package, and two timers:
