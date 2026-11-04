@@ -78,6 +78,11 @@ eq "--mem sets MemoryMax on the unit" 314572800 "$(box "systemctl --user show -p
 eq "submit jobs run in rx-job.slice" rx-job.slice "$(box "systemctl --user show -p Slice --value $U")"
 eq "rx-run.slice has CPU weight 1000 (cgroup cpu.weight)" 1000 "$(box 'cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/rx.slice/rx-run.slice/cpu.weight 2>/dev/null || systemctl --user show -p CPUWeight --value rx-run.slice')"
 eq "rx-job.slice has CPU weight 100" 100 "$(box 'cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/rx.slice/rx-job.slice/cpu.weight')"
+box 'rm -f ~/.config/systemd/user/rx.slice' && rx run -- true >/dev/null 2>&1 # a box from before the cap
+m=$(box 'cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/rx.slice/memory.max')
+t=$(box "awk '/MemTotal/ {printf \"%d\", \$2 * 1024}' /proc/meminfo")
+case $m in '' | *[!0-9]*) nok "rx.slice caps all jobs' memory" "memory.max: $m" ;;
+  *) [ "$m" -lt "$t" ] && ok "rx.slice caps all jobs' memory" || nok "rx.slice caps all jobs' memory" "$m >= $t" ;; esac
 rx wait memjob >/dev/null 2>&1
 rx submit --mem 64M oom -- 'head -c 600M /dev/zero | tail >/dev/null' >/dev/null 2>&1
 out=$(rx wait oom 2>&1); rc=$?

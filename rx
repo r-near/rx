@@ -77,10 +77,11 @@ b_disk() { # data and boot disk usage; warns above 85%
 }
 b_slices() {
   local d=$HOME/.config/systemd/user
-  [ -e "$d/rx-job.slice" ] && return
+  [ -e "$d/rx.slice" ] && return
   mkdir -p "$d"
   printf '[Slice]\nCPUWeight=1000\n' >"$d/rx-run.slice"
   printf '[Slice]\nCPUWeight=100\n' >"$d/rx-job.slice"
+  printf '[Slice]\nMemoryMax=80%%\n' >"$d/rx.slice" # parent of both: a runaway job is OOM-killed here, not box-wide
   systemctl --user daemon-reload
 }
 b_recv() { # rsync --server args...: lock, wait or refuse, prepare dest, sync, start; all under one lock
