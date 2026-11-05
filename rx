@@ -398,10 +398,11 @@ attach() { # name own|wait: stream until the job ends. Ctrl-C stops an owned run
     s=$(rcall jstate "$wtid" "$name" "$tok" 2>/dev/null) || s=unknown
     case $s in
       exit\ 255 | lost*) ;;
+      exit\ *) rc=${s#exit }; echo "rx: output cut off; see rx logs $name" >&2 ;;
       *) fail "lost the connection to the box; $name: $s. Reattach: rx wait $name" ;;
     esac
   fi
-  exit $rc
+  exit "$rc"
 }
 
 cmd=${1:-}

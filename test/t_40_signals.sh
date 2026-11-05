@@ -67,6 +67,14 @@ eq "after SIGKILL of the client the job finishes (code)" 6 $rc
 has "after SIGKILL of the client the job finishes (output)" survived "$out"
 pkill -f "__remote .rx/stage/.* follow" 2>/dev/null # the killed client's orphaned ssh
 
+# The follower's ssh dies (exit 255) after the job finished: rx exits with the job's code.
+rx submit cut -- 'seq 1 200000; exit 3' >/dev/null 2>&1
+rx wait cut >/dev/null 2>&1
+"${RXC[@]}" wait cut 2>"$W/cut.err" | { wait_for 10 pgrep -f '[f]ollow .* cut -' && pkill -TERM -f '[f]ollow .* cut -'; cat >/dev/null; }
+eq "follower lost after the job finished: the job's code" 3 "${PIPESTATUS[0]}"
+hasnt "follower lost after the job finished: not blamed on the connection" "lost the connection" "$(cat "$W/cut.err")"
+has "follower lost after the job finished: points at rx logs" "rx logs cut" "$(cat "$W/cut.err")"
+
 # rx wait never kills: INT and TERM on wait only detach.
 rx submit longjob -- 'sleep 6; exit 3' >/dev/null 2>&1
 "${RXC[@]}" wait longjob >/dev/null 2>"$W/w.err" &
