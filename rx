@@ -7,7 +7,7 @@
 #   rx logs <name> [n]                    last n lines of a job's log (default 200)
 #   rx ps [-a]                            jobs of this worktree (-a: all worktrees)
 #   rx kill <name>                        stop a job and its processes (not Docker containers)
-#   rx pull <path> [name]                 copy box data into ./.rx-out/ (from a job's snapshot with name)
+#   rx pull <path> [job]                  copy box data into ./.rx-out/ (from that job's snapshot)
 #   rx sh [-- <cmd>]                      shell (or one quick command, no sync) in this worktree's box dir
 #   rx up | rx status | rx stop [-f]      box lifecycle (gcloud)
 #   rx grow <size>                        resize the data disk (e.g. 1000GB) and grow its filesystem
@@ -438,7 +438,7 @@ case $cmd in
     [ $# = 1 ] || die "usage: rx kill <name>"
     repo_ctx; connect; rcall kill "$wtid" "$1" - ;;
   pull)
-    u="usage: rx pull <path> [name] (files land in ./.rx-out/)"
+    u="usage: rx pull <path> [job] (files land in ./.rx-out/)"
     case ${1:--} in -*) die "$u" ;; esac
     case ${2:-run} in -* | *[!A-Za-z0-9_-]*) die "$u" ;; esac
     repo_ctx; find_rsync
