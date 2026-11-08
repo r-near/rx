@@ -63,7 +63,7 @@ rx submit oldjob -- 'echo old' >/dev/null 2>&1; rx wait oldjob >/dev/null 2>&1
 rx submit newjob -- 'echo new' >/dev/null 2>&1; rx wait newjob >/dev/null 2>&1
 D=$(wtdir); id=$(basename "$D")
 box "mkdir -p ~/rx/w/stale_repo-0000000000/src && echo x >~/rx/w/stale_repo-0000000000/src/f && printf 'src/f\0' >~/rx/m/stale_repo-0000000000 &&
-  touch -d '-15 days' ~/rx/m/stale_repo-0000000000 && touch -d '-4 days' ~/rx/jobs/$id/.oldjob@*/log"
+  touch -d '-15 days' ~/rx/m/stale_repo-0000000000 && touch -d '-2 days' ~/rx/jobs/$id/.oldjob@*/log"
 out=$(box 'rx-box cleanup --dry-run')
 has "cleanup dry run lists the stale worktree" "remove /home/dev/rx/w/stale_repo-0000000000" "$out"
 has "cleanup dry run lists the old job" "/.oldjob@" "$out"

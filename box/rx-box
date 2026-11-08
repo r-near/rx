@@ -6,7 +6,7 @@
 # Powers off once there have been no active rx units and no ssh sessions (OpenSSH or Tailscale SSH)
 # for the whole limit, and ~/.rx/last-activity is at least the limit old: about 30 minutes after the
 # last ssh connection closes (about 45 after the last rx call, with ControlPersist), give or take a tick.
-# Tunables (env): RX_IDLE_MIN=30 RX_IDLE_STATE=/run/rx-idle-since RX_KEEP_DAYS=14 RX_JOB_DAYS=3
+# Tunables (env): RX_IDLE_MIN=30 RX_IDLE_STATE=/run/rx-idle-since RX_KEEP_DAYS=14 RX_JOB_DAYS=1
 set -u
 cmd=${1:-} dry='' user=dev
 shift || true
@@ -68,7 +68,7 @@ idle() {
 }
 
 cleanup() { # prune worktree dirs untouched for RX_KEEP_DAYS and finished jobs older than RX_JOB_DAYS
-  local B=$HOME/rx keep=$((${RX_KEEP_DAYS:-14} * 1440)) jobs=$((${RX_JOB_DAYS:-3} * 1440)) d id J n w
+  local B=$HOME/rx keep=$((${RX_KEEP_DAYS:-14} * 1440)) jobs=$((${RX_JOB_DAYS:-1} * 1440)) d id J n w
   export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
   running() { systemctl --user list-units "rx-$1.service" --state=active,activating,deactivating --no-legend | grep -q .; }
   del() { echo "remove $*"; [ -n "$dry" ] || rm -rf "$@"; }

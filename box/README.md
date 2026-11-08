@@ -42,7 +42,7 @@ sudo ./setup.sh [--user dev] [--data-disk DEV | --data-loop FILE:SIZE] [--mbx-bu
 What setup.sh owns: the `dev` user with passwordless sudo and linger, the data disk, Docker with buildx (data-root on `/data`), rustup with stable and nightly, mise with Node LTS (`mise use -g node@lts`), mbx, mold, cargo-binstall, cargo-nextest, cargo-fuzz and cargo-llvm-cov, cargo-near 0.21.0 and a near-sandbox 2.14.0 binary in `~/.near/` (for near-workspaces tests), Temurin 21 with `tla2tools.jar` (`tlc` wrapper), build deps, the utilities (jq, ripgrep, fd, fzf, bat, eza, zoxide, tmux, btop, ncdu), unattended security upgrades without automatic reboots, the `tailscale` package, and two timers:
 
 - `rx-idle.timer`, every 5 minutes, runs `rx-box idle`. It powers off once there have been no active rx units and no ssh sessions for 30 straight minutes and the last rx call (`~/.rx/last-activity`) is at least 30 minutes old. An idle ControlMaster counts as a session until `ControlPersist` (15 minutes) expires, so that's about 45 minutes after the last rx call, or 30 minutes after the last other ssh session ends, give or take one tick.
-- `rx-cleanup.timer`, daily, runs `rx-box cleanup`. It prunes worktree mirrors (with their snapshots) untouched for 14 days, and finished jobs older than 3 days along with their snapshots.
+- `rx-cleanup.timer`, daily, runs `rx-box cleanup`. It prunes worktree mirrors (with their snapshots) untouched for 14 days, and finished jobs older than a day along with their snapshots.
 
 It doesn't create the VM, set up networking, or run `tailscale up`.
 
