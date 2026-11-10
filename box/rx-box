@@ -2,11 +2,11 @@
 # rx-box: box-side maintenance for rx, run by systemd timers that setup.sh installs.
 #   rx-box idle [--dry-run] [--user dev]   (root, every 5 min) power off after 30 idle minutes
 #   rx-box sessions                        print the ssh sessions the idle check counts
-#   rx-box cleanup [--dry-run]             (as the rx user, daily) prune old worktree dirs and jobs
+#   rx-box cleanup [--dry-run]             (as the rx user, daily) prune old worktree dirs, jobs and scratch
 # Powers off once there have been no active rx units and no ssh sessions (OpenSSH or Tailscale SSH)
 # for the whole limit, and ~/.rx/last-activity is at least the limit old: about 30 minutes after the
 # last ssh connection closes (about 45 after the last rx call, with ControlPersist), give or take a tick.
-# Tunables (env): RX_IDLE_MIN=30 RX_IDLE_STATE=/run/rx-idle-since RX_KEEP_DAYS=14 RX_JOB_DAYS=1
+# Tunables (env): RX_IDLE_MIN=30 RX_IDLE_STATE=/run/rx-idle-since RX_KEEP_DAYS=3 RX_JOB_DAYS=1 RX_SCRATCH_DAYS=3
 set -u
 cmd=${1:-} dry='' user=dev
 shift || true
@@ -67,8 +67,11 @@ idle() {
   fi
 }
 
-cleanup() { # prune worktree dirs untouched for RX_KEEP_DAYS and finished jobs older than RX_JOB_DAYS
-  local B=$HOME/rx keep=$((${RX_KEEP_DAYS:-14} * 1440)) jobs=$((${RX_JOB_DAYS:-1} * 1440)) d id J n w
+# Prune worktree dirs untouched for RX_KEEP_DAYS, finished jobs older than RX_JOB_DAYS, and ~/rx/scratch
+# entries with nothing written for RX_SCRATCH_DAYS.
+cleanup() {
+  local B=$HOME/rx keep=$((${RX_KEEP_DAYS:-3} * 1440)) jobs=$((${RX_JOB_DAYS:-1} * 1440)) d id J n w
+  local scratch=$((${RX_SCRATCH_DAYS:-3} * 1440)) S sudo='' busy e
   export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
   running() { systemctl --user list-units "rx-$1.service" --state=active,activating,deactivating --no-legend | grep -q .; }
   del() { echo "remove $*"; [ -n "$dry" ] || rm -rf "$@"; }
@@ -87,6 +90,23 @@ cleanup() { # prune worktree dirs untouched for RX_KEEP_DAYS and finished jobs o
     del "$J"
     [ -e "$B/jobs/$id/$n" ] || del "$B/jobs/$id/$n" "$B/snap/$id-$n" "$B/m/$id-$n" # link now dangling
   done
+  # Scratch: an entry stays while anything in it was written within the limit, it holds a .keep file,
+  # a process has its cwd or an open file in it, or a running container mounts it. Docker -v output
+  # is often root-owned, hence sudo.
+  S=$(realpath "$B/scratch" 2>/dev/null) || S=''
+  if [ -n "$S" ]; then
+    ! sudo -n true 2>/dev/null || sudo='sudo -n'
+    busy=$({ $sudo find /proc/[0-9]*/cwd /proc/[0-9]*/fd -maxdepth 1 -type l -printf '%l\n' 2>/dev/null
+      docker ps -q 2>/dev/null | xargs -r docker inspect -f '{{range .Mounts}}{{println .Source}}{{end}}' 2>/dev/null; } |
+      sed 's|$|/|')
+    for e in "$S"/*; do
+      [ -e "$e" ] || [ -L "$e" ] || continue
+      n=${e##*/}
+      [ ! -e "$e/.keep" ] && [ -z "$($sudo find "$e" -mmin "-$scratch" -print -quit 2>/dev/null)" ] || continue
+      ! grep -qF -e "$S/$n/" -e "$B/scratch/$n/" <<<"$busy" || continue
+      echo "remove $e"; [ -n "$dry" ] || $sudo rm -rf -- "$e"
+    done
+  fi
   find "$HOME/.rx/stage" -mindepth 1 -maxdepth 1 -mmin +1440 -exec sh -c 'echo "remove $1"; [ -n "$2" ] || rm -rf "$1"' _ {} "$dry" \; 2>/dev/null
   find "$HOME/.rx/bin" -name 'rx-*' -mtime +30 -exec sh -c 'echo "remove $1"; [ -n "$2" ] || rm -f "$1"' _ {} "$dry" \; 2>/dev/null
   true

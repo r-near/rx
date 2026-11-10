@@ -64,7 +64,12 @@ rx submit newjob -- 'echo new' >/dev/null 2>&1; rx wait newjob >/dev/null 2>&1
 D=$(wtdir); id=$(basename "$D")
 box "mkdir -p ~/rx/w/stale_repo-0000000000/src && echo x >~/rx/w/stale_repo-0000000000/src/f && printf 'src/f\0' >~/rx/m/stale_repo-0000000000 &&
   touch -d '-15 days' ~/rx/m/stale_repo-0000000000 && touch -d '-2 days' ~/rx/jobs/$id/.oldjob@*/log"
+box 'cd ~/rx && mkdir -p scratch/s_old/sub scratch/s_new scratch/s_keep scratch/s_busy && echo x >scratch/s_old/sub/f &&
+  touch scratch/s_keep/.keep && sudo chown -R root scratch/s_old/sub &&
+  sudo find scratch/s_old scratch/s_keep scratch/s_busy -exec touch -d "-4 days" {} + &&
+  (cd scratch/s_busy && setsid sleep 61 >/dev/null 2>&1 &)'
 out=$(box 'rx-box cleanup --dry-run')
+has "cleanup dry run lists the idle scratch dir" "/scratch/s_old" "$out"
 has "cleanup dry run lists the stale worktree" "remove /home/dev/rx/w/stale_repo-0000000000" "$out"
 has "cleanup dry run lists the old job" "/.oldjob@" "$out"
 box 'test -d ~/rx/w/stale_repo-0000000000' && ok "dry run deletes nothing" || nok "dry run deleted"
@@ -72,5 +77,9 @@ box 'rx-box cleanup' >/dev/null
 box 'test ! -e ~/rx/w/stale_repo-0000000000 && test ! -e ~/rx/m/stale_repo-0000000000' && ok "stale worktree dir pruned" || nok "stale worktree kept"
 box "test ! -e ~/rx/jobs/$id/oldjob && test ! -e ~/rx/snap/$id-oldjob" && ok "old job, its link and snapshot pruned" || nok "old job kept"
 box "test -d $D && test -e ~/rx/jobs/$id/newjob" && ok "recent worktree and job kept" || nok "recent data pruned"
+box 'test ! -e ~/rx/scratch/s_old' && ok "idle scratch dir pruned, root-owned files included" || nok "idle scratch dir kept"
+box 'cd ~/rx/scratch && test -d s_new && test -d s_keep && test -d s_busy' && ok "recent, .keep and in-use scratch dirs kept" || nok "live scratch pruned"
+box 'pkill -f "^sleep 61"; rx-box cleanup' >/dev/null
+box 'test ! -e ~/rx/scratch/s_busy' && ok "scratch dir pruned once nothing uses it" || nok "unused scratch dir kept"
 out=$(rx ps); hasnt "ps no longer lists the pruned job" oldjob "$out"
 has "ps still lists the recent job" newjob "$out"
