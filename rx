@@ -328,7 +328,7 @@ wake() { # start the instance and wait for ssh; a Spot stockout exits 75 right a
   fi
   local t0=$SECONDS
   until probe; do
-    [ $((SECONDS - t0)) -lt "${RX_WAKE_TIMEOUT:-180}" ] || fail "box started but ssh did not answer within ${RX_WAKE_TIMEOUT:-180}s"
+    [ $((SECONDS - t0)) -lt "${RX_WAKE_TIMEOUT:-180}" ] || fail "box started but ssh did not answer within ${RX_WAKE_TIMEOUT:-180}s (if it was just preempted, run the command again)"
     sleep 2
   done
 }

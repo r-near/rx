@@ -26,7 +26,7 @@ Box layout, all on one XFS data filesystem so reflinks work between them:
 
 Containers run in `containers.slice` (`cgroup-parent` in `daemon.json`) with `MemoryMax=70%` of RAM, so a runaway container is OOM-killed inside that slice instead of taking rx jobs with it. Containers still run outside rx's CPU weights.
 
-The box home and `/tmp` are on the 100 GB boot disk; `rx status` reports both disks and warns above 85%. Submit snapshots are reflink copies, so `du` over `~/rx/snap` overstates real usage; use `df -h /data` (or `rx status`) for actual disk use.
+The box home and `/tmp` are on the 100 GB boot disk; `rx status` reports both disks and warns above 85%. Submit snapshots are reflink copies, so `du` over `~/rx/snap` overstates real usage; use `df -h /data` (or `rx status`) for actual disk use. Expect `/data` to sit at 80-88%: mbx fills the disk to its 20% floor, and bursts of snapshots overshoot it until the next GC. That is the cache working, not a leak.
 
 `setup.sh` runs as root on Ubuntu 24.04 and is idempotent:
 
@@ -165,4 +165,4 @@ If a stockout lasts, switch the stopped box to a smaller type in the same zone. 
 gcloud compute instances set-machine-type buildbox --zone your-zone --machine-type c3d-standard-30
 ```
 
-Switch back once capacity returns.
+Switch back once capacity returns: the box must be stopped (`rx stop`, or wait for the idle power-off), then run the same command with `c3d-standard-60`. If `rx up` then exits 75, set the smaller type again.
