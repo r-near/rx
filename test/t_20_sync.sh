@@ -101,3 +101,9 @@ python3 -c 'import os; os.utime("f", ns=(1700000000_100000000, 1700000000_100000
 rx run -- true >/dev/null 2>&1
 echo v2 >f && python3 -c 'import os; os.utime("f", ns=(1700000000_600000000, 1700000000_600000000))'
 eq "same-size, same-second rewrite is synced" v2 "$(rx run -- 'cat f' 2>/dev/null)"
+
+# A file deleted by another process after rsync listed it (fake-bin/ssh does that) doesn't stop the run.
+mkrepo vanish && echo v >vanish.txt
+out=$(RX_TEST_VANISH=$PWD/vanish.txt rx run -- 'echo ran; exit 7' 2>"$W/vanish.err"); rc=$?
+has "the file vanished mid-sync" "file has vanished" "$(cat "$W/vanish.err")"
+eq "a file vanishing mid-sync: the command still runs, rx exits with its code" "7 ran" "$rc $out"

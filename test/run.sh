@@ -88,7 +88,7 @@ printf 'export RX_CONFIG=%s RX_CONTROL_DIR=/tmp/rxt.manual RX_TEST_CONTAINER=%s 
 echo "== static"
 eq "tests drive the client with macOS /bin/bash 3.2" 3 "$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"')"
 if command -v shellcheck >/dev/null; then
-  out=$(shellcheck "$R/rx" "$R/box/rx-box" "$R/box/setup.sh" "$T"/*.sh "$T/fake-bin/gcloud" 2>&1) && ok "shellcheck clean" || nok "shellcheck" "$out"
+  out=$(shellcheck "$R/rx" "$R/box/rx-box" "$R/box/setup.sh" "$T"/*.sh "$T"/fake-bin/* 2>&1) && ok "shellcheck clean" || nok "shellcheck" "$out"
 fi
 for f in "$T"/t_*.sh; do
   case $f in *"$PATTERN"*) ;; *) continue ;; esac

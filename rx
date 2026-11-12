@@ -114,7 +114,7 @@ b_recv() { # rsync --server args...: lock, wait or refuse, prepare dest, sync, s
   fi
   mkdir -p "$dest"
   b_deletions "$dest" "$mf" "$ST/manifest"
-  rsync "$@" || exit
+  rsync "$@" || [ $? = 24 ] || exit # 24: a file vanished mid-sync
   b_rm "$dest" <"$ST/missing" # rsync --delete-missing-args removed these; drop emptied dirs too
   cp "$ST/manifest" "$mf"
   # Each job gets a fresh instance dir; jobs/<wtid>/<name> links to the newest. Followers of the
