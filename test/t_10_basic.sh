@@ -30,6 +30,8 @@ eq "RX_ENV overrides, values kept verbatim" 'always|a b$c' "$out"
 rx run >/dev/null 2>&1; eq "run without a command is a usage error" 2 $?
 out=$(rx pull --help 2>&1); eq "pull --help is a usage error" 2 $?
 has "pull usage says where files land" ".rx-out/" "$out"
+out=$(rx run --help 2>&1); has "run --help prints usage, starts no job" "rx run [--]" "$out"
+out=$(rx logs --help 2>&1); has "logs --help prints usage" "rx logs <name>" "$out"
 rx pull out/x /tmp/dest >/dev/null 2>&1; eq "pull rejects a path where the job name goes" 2 $?
 rx submit run -- true >/dev/null 2>&1; eq "submit name 'run' is refused" 2 $?
 rx bogus >/dev/null 2>&1; eq "unknown command prints usage, exit 2" 2 $?

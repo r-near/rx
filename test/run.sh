@@ -61,7 +61,7 @@ docker rm -f $C >/dev/null 2>&1
 docker run -d --name $C --hostname buildbox --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock \
   -p "127.0.0.1:$PORT:22" $C >/dev/null || exit 1
 wait_for 60 boxroot 'systemctl is-system-running | grep -qE "running|degraded"' || { echo "systemd did not boot"; exit 1; }
-docker exec -i $C sh -c 'install -d -o dev -g dev -m 700 ~dev/.ssh && cat >~dev/.ssh/authorized_keys && chown dev: ~dev/.ssh/authorized_keys' <"$W/key.pub"
+docker exec -i $C sh -c 'install -d -o dev -g dev -m 700 ~dev/.ssh && cat >~dev/.ssh/authorized_keys && chown dev: ~dev/.ssh/authorized_keys && chmod 600 ~dev/.ssh/authorized_keys' <"$W/key.pub"
 echo "== data disk (loopback XFS) and timers"
 boxroot '/opt/rx-box/setup.sh --minimal --data-loop /var/lib/rx-data.img:4G' >"$W/setup.log" 2>&1 || { cat "$W/setup.log"; exit 1; }
 TIMERS=$(boxroot 'systemctl is-enabled rx-idle.timer rx-cleanup.timer | tr "\n" " "')

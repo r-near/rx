@@ -407,6 +407,7 @@ attach() { # name own|wait: stream until the job ends. Ctrl-C stops an owned run
 
 cmd=${1:-}
 shift || true
+case ${1:-} in -h | --help) cmd=help ;; esac # rx <cmd> --help: print usage, don't sync or look up a job
 case $cmd in
   run)
     [ "${1:-}" = -- ] && shift
