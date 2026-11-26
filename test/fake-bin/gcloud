@@ -2,6 +2,7 @@
 # Fake gcloud for tests: maps the few "gcloud compute" calls rx makes onto the docker test container.
 #   instances start|stop|describe NAME   docker start/stop/inspect
 #   disks resize NAME --size S           grow the container's loopback data disk to S
+# RX_TEST_GCLOUD_NOOP=<file>: the next "instances start" only prints and removes the file (box stays off).
 # RX_TEST_GCLOUD_STOCKOUT=1 (or =<file> with a captured error) makes "instances start" fail like a Spot stockout.
 echo "gcloud $*" >>"${RX_TEST_GCLOUD_LOG:-/dev/null}"
 c=${RX_TEST_CONTAINER:?}
@@ -16,6 +17,7 @@ case "$1 $2 $3" in
       exit 1
     fi
     echo "Starting instance(s) $4...done." >&2
+    if [ -f "${RX_TEST_GCLOUD_NOOP:-}" ]; then rm -f "$RX_TEST_GCLOUD_NOOP"; exit 0; fi # a start sent while the box powers off does nothing
     docker start "$c" >/dev/null ;;
   "compute instances stop") docker stop "$c" >/dev/null ;;
   "compute instances describe")

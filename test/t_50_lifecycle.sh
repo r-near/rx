@@ -43,6 +43,13 @@ has "wake prints the waking message" "rx: waking box…" "$(cat "$W/wake.err")"
 has "wake called gcloud start with instance, zone, project" \
   "compute instances start rx-test-box --zone test-zone-a --project test-project --quiet" "$(gl)"
 
+# --- wake while the box is still powering off: the first start does nothing, wake asks again ---
+docker stop -t 2 "$C" >/dev/null
+: >"$RX_TEST_GCLOUD_LOG"; : >"$W/noop"
+out=$(RX_TEST_GCLOUD_NOOP=$W/noop RX_WAKE_RETRY=4 RX_WAKE_TIMEOUT=60 rx run -- 'echo woke' 2>/dev/null); rc=$?
+eq "a start that did nothing is retried and the call succeeds" "0 woke" "$rc $out"
+[ "$(gl | grep -c 'instances start')" -ge 2 ] && ok "wake sent start again" || nok "wake sent start once" "$(gl)"
+
 # --- stockout: clear, distinct, immediate ---
 docker stop -t 2 "$C" >/dev/null
 t0=$SECONDS

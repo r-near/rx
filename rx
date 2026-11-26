@@ -326,9 +326,11 @@ wake() { # start the instance and wait for ssh; a Spot stockout exits 75 right a
     printf '%s\n' "$err" >&2
     fail "gcloud could not start $RX_GCE_INSTANCE"
   fi
-  local t0=$SECONDS
+  local t0=$SECONDS next=${RX_WAKE_RETRY:-30}
   until probe; do
     [ $((SECONDS - t0)) -lt "${RX_WAKE_TIMEOUT:-180}" ] || fail "box started but ssh did not answer within ${RX_WAKE_TIMEOUT:-180}s (if it was just preempted, run the command again)"
+    # a start sent while the box was still powering off did nothing: ask again
+    [ $((SECONDS - t0)) -lt "$next" ] || { next=$((next + ${RX_WAKE_RETRY:-30})); gce instances start "$RX_GCE_INSTANCE" >/dev/null 2>&1; }
     sleep 2
   done
 }
